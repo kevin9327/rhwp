@@ -382,6 +382,23 @@ rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작�
 rhwp export-tables 작성본.hwp --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
 ```
 
+### `edit check-box <파일> --table <번호> --row <행> --col <열> [--off] [옵션]` (#3395)
+표 셀의 **체크박스(문단 글머리표 ☐)를 체크(☑)/해제**한다 — 실물 양식의 선택 항목용.
+체크박스는 셀 텍스트가 아니라 글머리표라 `set-cell`(텍스트)로는 표시할 수 없다. 이 명령은
+대상 셀 문단만 새 글머리표(☑ U+2611 / 해제 ☐ U+2610)로 바꾼다. 좌표계는 `export-tables`
+격자와 동일. 서식의 `check_bullet_char` 는 쓰레기값인 경우가 많아 신뢰하지 않고 표준 쌍을 쓴다.
+- `--table/--row/--col` — 격자 좌표(0부터, 본문 최상위 표)
+- `--off` — 체크 해제(기본: 체크)
+- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_checked.hwp`)
+- `--dry-run` — 파일을 쓰지 않고 변경 예정만 보고. `--json` 봉투:
+  `{"schemaVersion":"1.0","source","table","row","col","checked","dryRun","output"?}`
+- **글머리표가 없는 칸**(체크박스 아님)은 exit 1. 병합 덮인 칸·격자 밖은 exit 2.
+
+```bash
+rhwp export-tables 양식.hwp --json | jq '.tables[6].cells[] | select(.row==13)'   # 체크박스 칸 좌표 확인
+rhwp edit check-box 양식.hwp --table 6 --row 13 --col 1 -o 작성본.hwp --json       # 인공지능 √
+```
+
 ---
 
 ## 3. 변환·비교

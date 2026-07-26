@@ -313,6 +313,25 @@ fn show_mcp_tools() -> i32 {
             serde_json::json!(["edit", "set-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--text", "{text}", "--json"]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "output"],
         ),
+        tool(
+            "hwp_check_box",
+            "HWP 표 셀의 체크박스(글머리표 ☐)를 체크(☑)하거나 해제한다 — 누름틀·텍스트가 아닌 선택 항목용. 좌표는 hwp_export_tables 격자와 동일. 글머리표가 없는 칸은 오류.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "row": { "type": "integer", "minimum": 0, "description": "행 (0부터)" },
+                    "col": { "type": "integer", "minimum": 0, "description": "열 (0부터)" },
+                    "off": { "type": "boolean", "description": "true 면 체크 해제 (기본: 체크)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_checked.hwp" }
+                },
+                "required": ["path", "table", "row", "col"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "check-box", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--json"]),
+            &["schemaVersion", "source", "table", "row", "col", "checked", "dryRun", "output"],
+        ),
     ];
 
     let manifest = serde_json::json!({
@@ -514,7 +533,7 @@ fn show_capabilities(args: &[String]) -> i32 {
         cmd_json(
             "edit",
             "edit",
-            "문서 편집 — fill-fields: 누름틀 채우기 / replace-text: 일괄 치환 / set-cell: 표 셀 기록",
+            "문서 편집 — fill-fields / replace-text / set-cell / check-box(표 셀 체크박스)",
             false,
             &[
                 "--data",
@@ -526,6 +545,7 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "--col",
                 "--text",
                 "--keep-style",
+                "--off",
                 "-o",
                 "--dry-run",
                 "--json",
@@ -544,6 +564,7 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "oldText",
                 "newText",
                 "keepStyle",
+                "checked",
                 "output",
             ],
         ),
@@ -932,6 +953,16 @@ fn print_help() {
     println!("      --dry-run                 파일을 쓰지 않고 old→new 만 보고");
     println!("      --json                    계약 봉투 JSON을 stdout에 출력");
     println!("      병합으로 덮인 칸은 앵커 좌표 안내와 함께 오류 종료");
+    println!();
+    println!("  edit check-box <파일> --table <번호> --row <행> --col <열> [--off] [옵션]");
+    println!("      표 셀의 체크박스(글머리표 ☐)를 체크(☑)/해제 — 실물 양식 선택 항목");
+    println!();
+    println!("      --table/--row/--col       export-tables 격자와 같은 좌표 (0부터)");
+    println!("      --off                     체크 해제(기본: 체크)");
+    println!("      -o, --output <파일>       출력 파일 (기본: 입력명_checked.hwp)");
+    println!("      --dry-run                 파일을 쓰지 않고 변경 예정만 보고");
+    println!("      --json                    계약 봉투 JSON을 stdout에 출력");
+    println!("      글머리표가 없는 칸은 오류 종료");
     println!();
     println!("내부 개발·회귀 도구 (일반 사용자 대상 아님):");
     println!("  test-caption <파일.hwp>             캡션 라운드트립 검증");
@@ -7732,12 +7763,13 @@ fn ir_diff(args: &[String]) -> i32 {
 /// **실패 시 원본 불변**(하나라도 실패하면 출력 파일을 쓰지 않는다).
 fn run_edit(args: &[String]) -> i32 {
     const USAGE: &str =
-        "사용법: rhwp edit <fill-fields|replace-text|set-cell> <파일.hwp> [옵션] (rhwp --help 참조)";
+        "사용법: rhwp edit <fill-fields|replace-text|set-cell|check-box> <파일.hwp> [옵션] (rhwp --help 참조)";
 
     match args.first().map(String::as_str) {
         Some("fill-fields") => edit_fill_fields(&args[1..]),
         Some("replace-text") => edit_replace_text(&args[1..]),
         Some("set-cell") => edit_set_cell(&args[1..]),
+        Some("check-box") => edit_check_box(&args[1..]),
         Some(other) => {
             eprintln!("오류: 알 수 없는 edit 하위 명령 - {}", other);
             eprintln!("{USAGE}");
@@ -8109,6 +8141,333 @@ fn edit_replace_text(args: &[String]) -> i32 {
 /// [#3381] 좌표계는 `export-tables` 격자와 동일하다 — 발견과 편집이 같은 주소를 쓴다.
 /// 검증된 코어 셀 편집 경로(delete/insert_text_in_cell)를 재사용하므로 새 편집 로직이
 /// 없다. v1 범위: 본문 최상위 표, 셀 첫 문단 교체(중첩 표·다문단 셀은 후속).
+/// [#3395] 본문 최상위 표의 (table_no,row,col) 앵커 셀을 모델 좌표로 해석한다.
+/// export-tables 격자와 같은 좌표계. 반환: (sec, para, ctrl, cell_idx) 또는 종료 코드.
+/// 병합 덮인 칸·격자 밖·표 없음은 안내 메시지와 함께 Err(코드).
+fn resolve_top_level_table_cell(
+    document: &rhwp::model::document::Document,
+    table_no: usize,
+    row: u16,
+    col: u16,
+) -> Result<(usize, usize, usize, usize), i32> {
+    use rhwp::document_core::queries::table_extract::extract_tables;
+    use rhwp::model::control::Control;
+    let grids = extract_tables(document);
+    let Some(grid) = grids
+        .iter()
+        .find(|g| g.index == table_no && g.container_path.is_empty())
+    else {
+        let top = grids.iter().filter(|g| g.container_path.is_empty()).count();
+        eprintln!(
+            "오류: 본문 최상위 표 {} 번이 없습니다 (최상위 표 {}개; 중첩 표는 범위 밖).",
+            table_no, top
+        );
+        return Err(EXIT_RUNTIME);
+    };
+    let Some(Control::Table(table)) = document.sections[grid.section].paragraphs[grid.paragraph]
+        .controls
+        .get(grid.control)
+    else {
+        eprintln!("오류: 표 컨트롤 좌표 해석 실패 (내부 불일치).");
+        return Err(EXIT_RUNTIME);
+    };
+    if row >= table.row_count || col >= table.col_count {
+        eprintln!(
+            "오류: 좌표가 격자를 벗어났습니다 — 표 {} 는 {}x{} 입니다.",
+            table_no, table.row_count, table.col_count
+        );
+        return Err(EXIT_USAGE);
+    }
+    match table
+        .cells
+        .iter()
+        .enumerate()
+        .find(|(_, c)| c.row == row && c.col == col)
+    {
+        Some((cell_idx, _)) => Ok((grid.section, grid.paragraph, grid.control, cell_idx)),
+        None => {
+            let anchor = table.cells.iter().find(|c| {
+                c.row <= row && row < c.row + c.row_span && c.col <= col && col < c.col + c.col_span
+            });
+            match anchor {
+                Some(a) => eprintln!(
+                    "오류: ({},{}) 는 병합으로 덮인 칸입니다 — 앵커 ({},{}) 를 지정하세요.",
+                    row, col, a.row, a.col
+                ),
+                None => eprintln!("오류: ({},{}) 위치에 셀이 없습니다.", row, col),
+            }
+            Err(EXIT_USAGE)
+        }
+    }
+}
+
+/// [#3395] 셀 문단 0 의 체크박스(글머리표)를 체크/해제한다.
+/// 반환: Ok(적용된 checked 상태) 또는 Err(메시지). 글머리표가 없으면 Err.
+fn apply_check_box(
+    document: &mut rhwp::model::document::Document,
+    sec: usize,
+    para: usize,
+    ctrl: usize,
+    cell_idx: usize,
+    checked: bool,
+) -> Result<(), String> {
+    use rhwp::model::control::Control;
+    // 대상 셀 문단 0 의 para_shape_id 를 얻는다.
+    let psid = {
+        let Some(Control::Table(table)) =
+            document.sections[sec].paragraphs[para].controls.get(ctrl)
+        else {
+            return Err("표 컨트롤을 찾을 수 없습니다".to_string());
+        };
+        let cp = table
+            .cells
+            .get(cell_idx)
+            .and_then(|c| c.paragraphs.first())
+            .ok_or_else(|| "셀 문단을 찾을 수 없습니다".to_string())?;
+        cp.para_shape_id as usize
+    };
+    // ParaShape → numbering_id → Bullet 을 복제한다 (공유 스타일을 이 문단만 바꾸기 위해).
+    let base_ps = document
+        .doc_info
+        .para_shapes
+        .get(psid)
+        .cloned()
+        .ok_or_else(|| "문단모양을 찾을 수 없습니다".to_string())?;
+    let nid = base_ps.numbering_id;
+    if nid == 0 {
+        return Err("이 칸에는 체크박스(글머리표)가 없습니다".to_string());
+    }
+    let base_bullet = document
+        .doc_info
+        .bullets
+        .get((nid - 1) as usize)
+        .cloned()
+        .ok_or_else(|| "글머리표 정의를 찾을 수 없습니다".to_string())?;
+
+    // 표시 글자: 표준 체크박스 쌍 U+2610(☐) ↔ U+2611(☑). 서식의 check_bullet_char 는
+    // 쓰레기값(예: U+1100)인 경우가 많아 신뢰하지 않는다. 원본이 다른 박스 글자여도
+    // 체크는 보편 글리프 ☑ 로, 해제는 원래 글자(없으면 ☐)로 복원한다.
+    let target_char = if checked {
+        '\u{2611}'
+    } else if base_bullet.bullet_char == '\u{2611}' {
+        '\u{2610}'
+    } else {
+        base_bullet.bullet_char
+    };
+
+    let mut new_bullet = base_bullet;
+    new_bullet.raw_data = None; // 변경 필드가 직렬화되게 원본 바이트를 버린다.
+    new_bullet.raw_para_head = None;
+    new_bullet.bullet_char = target_char;
+    document.doc_info.bullets.push(new_bullet);
+    let new_nid = document.doc_info.bullets.len() as u16; // 1-based
+
+    let mut new_ps = base_ps;
+    new_ps.raw_data = None;
+    new_ps.numbering_id = new_nid;
+    document.doc_info.para_shapes.push(new_ps);
+    let new_psid = (document.doc_info.para_shapes.len() - 1) as u16;
+
+    // 대상 셀 문단만 새 문단모양을 가리키게 하고, 표를 dirty 로 표시해 원본 표
+    // 바이트가 아니라 모델에서 재직렬화되게 한다 (이 마킹이 없으면 변경이 유실된다).
+    if let Some(Control::Table(table)) = document.sections[sec].paragraphs[para]
+        .controls
+        .get_mut(ctrl)
+    {
+        if let Some(cp) = table
+            .cells
+            .get_mut(cell_idx)
+            .and_then(|c| c.paragraphs.get_mut(0))
+        {
+            cp.para_shape_id = new_psid;
+        }
+        table.dirty = true;
+    }
+    // serialize_section(serializer/body_text.rs)은 section.raw_stream 이 Some 이면 IR 을
+    // 무시하고 원본 바이트를 그대로 반환한다. HWP5 파서는 모든 섹션에 raw_stream 을
+    // 채우므로, 셀 문단의 para_shape_id 변경을 저장에 반영하려면 섹션 raw_stream 을
+    // 무효화해야 한다 (doc_info.raw_stream_dirty 만으로는 DocInfo 만 재생성된다).
+    document.sections[sec].raw_stream = None;
+    document.doc_info.raw_stream_dirty = true;
+    Ok(())
+}
+
+/// `edit check-box` — 표 셀의 체크박스(글머리표)를 체크/해제한다 (실물 양식 선택 항목).
+///
+/// [#3395] 체크박스는 셀 텍스트가 아니라 문단 글머리표(☐)다 — set-cell(텍스트)로는
+/// 표시할 수 없다. 이 명령은 대상 문단의 글머리표를 체크 글자(☑ 또는 서식의 check_bullet)로
+/// 바꾼다. 좌표계는 export-tables 격자와 동일하다.
+fn edit_check_box(args: &[String]) -> i32 {
+    let mut file_path: Option<&str> = None;
+    let mut table_arg: Option<usize> = None;
+    let mut row_arg: Option<u16> = None;
+    let mut col_arg: Option<u16> = None;
+    let mut out_path: Option<String> = None;
+    let mut off = false;
+    let mut dry_run = false;
+    let mut json_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--table" | "--row" | "--col" => {
+                let name = args[i].clone();
+                i += 1;
+                let Some(v) = args.get(i).and_then(|v| v.parse::<u32>().ok()) else {
+                    eprintln!("오류: {} 뒤에 0 이상의 정수가 필요합니다.", name);
+                    return EXIT_USAGE;
+                };
+                match name.as_str() {
+                    "--table" => table_arg = Some(v as usize),
+                    "--row" => row_arg = Some(v as u16),
+                    _ => col_arg = Some(v as u16),
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--off" => off = true,
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(table_no), Some(row), Some(col)) =
+        (file_path, table_arg, row_arg, col_arg)
+    else {
+        eprintln!(
+            "사용법: rhwp edit check-box <파일> --table <번호> --row <행> --col <열> [--off] [-o <출력>] [--dry-run] [--json]"
+        );
+        return EXIT_USAGE;
+    };
+    let checked = !off;
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: HWP 파싱 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    let (sec, para, ctrl, cell_idx) =
+        match resolve_top_level_table_cell(doc.document(), table_no, row, col) {
+            Ok(v) => v,
+            Err(code) => return code,
+        };
+
+    if !dry_run {
+        if let Err(msg) = apply_check_box(doc.document_mut(), sec, para, ctrl, cell_idx, checked) {
+            eprintln!("오류: 체크박스 표시 실패 - {}", msg);
+            return EXIT_RUNTIME;
+        }
+    } else {
+        // dry-run 도 글머리표 유무는 검사해 잘못된 칸을 미리 알린다.
+        let base_ps_nid = {
+            use rhwp::model::control::Control;
+            let doc_ref = doc.document();
+            match doc_ref.sections[sec].paragraphs[para].controls.get(ctrl) {
+                Some(Control::Table(table)) => table
+                    .cells
+                    .get(cell_idx)
+                    .and_then(|c| c.paragraphs.first())
+                    .map(|cp| {
+                        doc_ref
+                            .doc_info
+                            .para_shapes
+                            .get(cp.para_shape_id as usize)
+                            .map(|ps| ps.numbering_id)
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0),
+                _ => 0,
+            }
+        };
+        if base_ps_nid == 0 {
+            eprintln!("오류: 이 칸에는 체크박스(글머리표)가 없습니다.");
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_checked.hwp", stem)
+    });
+
+    if !dry_run {
+        let out_bytes = match doc.export_hwp_native() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("오류: HWP 직렬화 실패 - {}", e);
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": "1.0",
+            "source": file_path,
+            "table": table_no,
+            "row": row,
+            "col": col,
+            "checked": checked,
+            "dryRun": dry_run,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+        }
+        println!("{envelope}");
+        return EXIT_OK;
+    }
+
+    let state = if checked { "체크" } else { "해제" };
+    if dry_run {
+        println!(
+            "변경 예정: {} 표{} ({},{}) → {}",
+            file_path, table_no, row, col, state
+        );
+    } else {
+        println!(
+            "{} 완료: {} → {} — 표{} ({},{})",
+            state, file_path, output_path, table_no, row, col
+        );
+    }
+    EXIT_OK
+}
+
 /// [#3391] 셀 문단 0 의 글자모양을 검정·비이탤릭·비진하게 글자모양 하나로 덮는다.
 /// 안내문(파란 이탤릭)을 지우고 실값을 쓰는 set-cell 의 제출 요건(검정 글씨) 대응.
 /// 검정 글자모양이 없으면 char_shape 0 을 복제해 검정화한 뒤 추가한다.

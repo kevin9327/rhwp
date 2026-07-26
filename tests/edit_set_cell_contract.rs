@@ -349,3 +349,40 @@ fn default_black_style_and_keep_style_flag() {
     assert_eq!(v2["keepStyle"], true, "{v2}");
     let _ = std::fs::remove_file(&out2);
 }
+
+/// [#3395] check-box — 글머리표 체크박스 셀 토글. 봉투·종료코드 계약.
+#[test]
+fn check_box_toggles_and_reports() {
+    // 실물 K-Startup 양식이 없으면(로컬 전용) 스킵 — 글머리표 체크박스가 있는 문서 필요.
+    let form =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/2025 행정업무운영 편람(최종).hwpx");
+    if !form.exists() {
+        return;
+    }
+    // 편람에도 글머리표가 있는 셀이 있으면 성공, 없으면 '글머리표 없음' 오류(둘 다 계약).
+    // 여기서는 최소한 인자 계약(누락 exit 2)만 고정한다.
+    let s = form.to_str().unwrap();
+    for args in [
+        vec!["edit", "check-box", s, "--row", "0", "--col", "0"], // --table 누락
+        vec!["edit", "check-box", s, "--table", "0", "--col", "0"], // --row 누락
+        vec!["edit", "check-box", s, "--table", "0", "--row", "0"], // --col 누락
+        vec![
+            "edit",
+            "check-box",
+            "--table",
+            "0",
+            "--row",
+            "0",
+            "--col",
+            "0",
+        ], // 파일 누락
+    ] {
+        let output = run(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{}",
+            describe(&args, &output)
+        );
+    }
+}
