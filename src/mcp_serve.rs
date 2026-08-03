@@ -46,6 +46,13 @@ struct SessionDoc {
     /// [#3609] hwp_doc_info 봉투용 — open 시점의 원본 크기·감지 형식.
     size_bytes: usize,
     detected_format: rhwp::parser::FileFormat,
+    /// [#3719 §6] undo 스택 — 편집 직전 스냅샷 ID를 쌓는다. 코어의 스냅샷 저장소
+    /// (`DocumentCore::save_snapshot_native`, 원래 studio 히스토리용)를 재사용한다 —
+    /// 편집 명령마다 역연산을 정의하는 것이 아니라 "편집 전 통째 복제"로 되돌린다.
+    undo_stack: Vec<u32>,
+    /// hwp_doc_undo 로 되돌린 편집을 다시 앞으로 감기 위한 스택. 새 편집이 들어오면
+    /// 비운다 — redo 후 새로 편집하면 이전 redo 가지는 의미가 없어지기 때문이다.
+    redo_stack: Vec<u32>,
 }
 
 /// 열린 문서 핸들 테이블. 서버 프로세스가 사는 동안 유지된다.
@@ -518,6 +525,16 @@ fn served_tools(
         }
     }));
     session.push(serde_json::json!({
+        "name": "hwp_doc_undo",
+        "description": "[#3719 §6] 핸들에 누적된 마지막 편집(hwp_doc_replace_text/set_cell/fill_fields 중 하나)을 되돌린다 — 디스크 미기록 편집만 대상이며, hwp_doc_save 로 이미 기록한 편집은 되돌리지 않는다. 되돌릴 편집이 없으면 오류로 보고한다(조용한 무동작 없음). 문서 전체가 편집 전 상태로 교체되므로 봉투의 changedPages 는 항상 null — hwp_doc_render_page 로 다시 볼 쪽을 판단하라.",
+        "inputSchema": { "type": "object", "properties": { "docId": { "type": "string" } }, "required": ["docId"] }
+    }));
+    session.push(serde_json::json!({
+        "name": "hwp_doc_redo",
+        "description": "[#3719 §6] hwp_doc_undo 로 되돌린 편집을 다시 적용한다. 되돌린 뒤 새 편집(replace_text/set_cell/fill_fields)을 하면 redo 스택이 비워져 더 이상 redo 할 수 없다. 다시 적용할 편집이 없으면 오류로 보고한다.",
+        "inputSchema": { "type": "object", "properties": { "docId": { "type": "string" } }, "required": ["docId"] }
+    }));
+    session.push(serde_json::json!({
         "name": "hwp_doc_save",
         "description": "[#3598] 핸들에 누적된 편집을 형식 보존(HWPX→HWPX, 그 외→HWP5, #3383 규약)으로 저장한다. 핸들은 저장 후에도 열려 있다 — 이어서 편집·재저장할 수 있다.",
         "inputSchema": {
@@ -586,6 +603,8 @@ fn handle_tool_call(
         "hwp_doc_replace_text" => Ok(session_replace_text(&args, sessions)),
         "hwp_doc_set_cell" => Ok(session_set_cell(&args, sessions)),
         "hwp_doc_fill_fields" => Ok(session_fill_fields(&args, sessions)),
+        "hwp_doc_undo" => Ok(session_undo(&args, sessions)),
+        "hwp_doc_redo" => Ok(session_redo(&args, sessions)),
         "hwp_doc_save" => Ok(session_save(&args, sessions)),
         "hwp_close" => Ok(session_close(&args, sessions)),
         _ => {
@@ -627,6 +646,8 @@ fn is_session_tool(name: &str) -> bool {
             | "hwp_doc_replace_text"
             | "hwp_doc_set_cell"
             | "hwp_doc_fill_fields"
+            | "hwp_doc_undo"
+            | "hwp_doc_redo"
             | "hwp_doc_save"
             | "hwp_close"
     )
@@ -654,6 +675,25 @@ fn tool_error(message: String) -> serde_json::Value {
         "content": [{ "type": "text", "text": message }],
         "isError": true
     })
+}
+
+/// [#3719 §6] 편집 직전에 부른다 — 스냅샷 하나를 코어 저장소에 남기고 undo 스택에
+/// 쌓는다. 새 편집이 스택에 쌓이는 순간 이전 redo 가지는 의미를 잃으므로 redo 스택은
+/// 여기서 비운다(discard_snapshot 으로 메모리도 함께 해제).
+fn push_undo_snapshot(sd: &mut SessionDoc) {
+    let id = sd.doc.save_snapshot_native();
+    sd.undo_stack.push(id);
+    for stale in sd.redo_stack.drain(..) {
+        sd.doc.discard_snapshot_native(stale);
+    }
+}
+
+/// 방금 push_undo_snapshot 한 스냅샷을 되돌린다 — 실제로는 아무것도 바뀌지 않은
+/// 호출(예: replacedCount 0)에서 undo 스택에 무의미한 항목을 남기지 않기 위해 쓴다.
+fn pop_unused_undo_snapshot(sd: &mut SessionDoc) {
+    if let Some(id) = sd.undo_stack.pop() {
+        sd.doc.discard_snapshot_native(id);
+    }
 }
 
 fn tool_ok_text(text: String) -> serde_json::Value {
@@ -707,6 +747,8 @@ fn session_open(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json
             source_is_hwpx,
             size_bytes,
             detected_format,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         },
     );
     tool_ok_text(
@@ -1056,9 +1098,14 @@ fn session_replace_text(args: &serde_json::Value, sessions: &mut Sessions) -> se
         .iter()
         .map(|m| (m.section, m.paragraph))
         .collect();
+    // [#3719 §6] hwp_doc_undo 가 되돌릴 지점 — 실제 치환을 시도하기 직전에 찍는다.
+    push_undo_snapshot(sd);
     let result = match sd.doc.replace_all_native(find, replace, case_sensitive) {
         Ok(r) => r,
-        Err(e) => return tool_error(format!("치환 실패: {e}")),
+        Err(e) => {
+            pop_unused_undo_snapshot(sd);
+            return tool_error(format!("치환 실패: {e}"));
+        }
     };
     // replace_all_native 는 {"ok":true,"count":N} 문자열을 낸다 — 계수만 뽑아
     // 세션 봉투 어휘(replacedCount)로 정규화한다.
@@ -1071,6 +1118,9 @@ fn session_replace_text(args: &serde_json::Value, sessions: &mut Sessions) -> se
     // hwp_doc_info/text/render/search 가 편집 전 레이아웃을 서빙한다.
     if count > 0 {
         sd.doc.repaginate_if_needed();
+    } else {
+        // 아무것도 바뀌지 않았다 — 되돌릴 게 없으니 방금 찍은 스냅샷을 버린다.
+        pop_unused_undo_snapshot(sd);
     }
     // [#3719 §6-1] 눈검증 대상 쪽 — 위 재조판 **뒤**라야 편집 후 레이아웃을 보고한다.
     // 0건 치환은 IR 이 그대로다: 볼 쪽이 없으니 빈 목록이 정확하다("전체를 보라"는
@@ -1171,6 +1221,8 @@ fn session_set_cell(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
             })
         },
     );
+    // [#3719 §6] hwp_doc_undo 가 되돌릴 지점 — 셀 비우기/쓰기를 시작하기 직전.
+    push_undo_snapshot(sd);
     for (pi, len) in para_lens.iter().enumerate() {
         if *len == 0 {
             continue;
@@ -1307,6 +1359,12 @@ fn session_fill_fields(args: &serde_json::Value, sessions: &mut Sessions) -> ser
         apply.push((name.to_string(), occurrence, value_str));
     }
 
+    // [#3719 §6] hwp_doc_undo 가 되돌릴 지점 — 적용할 게 있을 때만 찍는다(없으면
+    // 되돌릴 것도 없으니 undo 스택에 무의미한 항목을 남기지 않는다).
+    if !apply.is_empty() {
+        push_undo_snapshot(sd);
+    }
+    let doc = &mut sd.doc;
     // 2차: 적용. 검증을 통과한 키만 남았으므로 실패는 코어 결함 신호다.
     for (name, occurrence, value_str) in &apply {
         if let Err(e) = doc.set_field_value_by_name_at(name, *occurrence, value_str) {
@@ -1345,6 +1403,96 @@ fn session_fill_fields(args: &serde_json::Value, sessions: &mut Sessions) -> ser
             "notFound": not_found,
             "ambiguous": ambiguous,
             "confusable": confusable,
+        })
+        .to_string(),
+    )
+}
+
+/// [#3719 §6] 핸들의 마지막 편집(replace_text/set_cell/fill_fields)을 되돌린다.
+///
+/// 편집 명령마다 역연산을 정의하지 않는다 — 코어의 스냅샷 저장소(원래 studio
+/// undo/redo 히스토리용, `save_snapshot_native`/`restore_snapshot_native`)를 그대로
+/// 재사용해 "편집 직전 문서 통째 복원"으로 되돌린다. 되돌릴 편집이 없으면 (스택이
+/// 비었으면) 명확한 실패로 보고한다 — 조용히 아무 일도 안 하고 성공을 자처하지 않는다.
+fn session_undo(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json::Value {
+    let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
+        return tool_error("docId 가 필요합니다".into());
+    };
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
+        return tool_error_with_next(
+            format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"),
+            "hwp_open",
+            serde_json::json!({ "path": "<열 문서 경로>" }),
+            "핸들이 없거나 만료 — hwp_open 으로 docId 를 재발급한 뒤 재시도",
+        );
+    };
+    let Some(undo_id) = sd.undo_stack.pop() else {
+        return tool_error(
+            "되돌릴 편집이 없습니다 — hwp_doc_replace_text/set_cell/fill_fields 로 \
+             편집한 뒤에만 undo 할 수 있습니다"
+                .into(),
+        );
+    };
+    // 되돌리기 전 현재 상태를 redo 스택에 남긴다 — hwp_doc_redo 가 여기로 되돌아온다.
+    let redo_id = sd.doc.save_snapshot_native();
+    sd.redo_stack.push(redo_id);
+    if let Err(e) = sd.doc.restore_snapshot_native(undo_id) {
+        // 복원 실패 — 되돌리기를 취소하고 방금 쌓은 redo 스냅샷도 정리한다.
+        sd.redo_stack.pop();
+        sd.doc.discard_snapshot_native(redo_id);
+        return tool_error(format!("undo 실패: {e}"));
+    }
+    sd.doc.discard_snapshot_native(undo_id);
+    tool_ok_text(
+        serde_json::json!({
+            "schemaVersion": "1.0",
+            "docId": doc_id,
+            "undone": true,
+            "canUndo": !sd.undo_stack.is_empty(),
+            "canRedo": !sd.redo_stack.is_empty(),
+            // 문서 전체가 스냅샷으로 통째 교체됐다 — 걸친 쪽을 부분 계산할 근거가
+            // 없으므로 null(원칙 5) — 전체를 다시 보라는 뜻이다.
+            "changedPages": serde_json::Value::Null,
+        })
+        .to_string(),
+    )
+}
+
+/// [#3719 §6] hwp_doc_undo 로 되돌린 편집을 다시 앞으로 감는다. undo 와 대칭.
+fn session_redo(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json::Value {
+    let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
+        return tool_error("docId 가 필요합니다".into());
+    };
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
+        return tool_error_with_next(
+            format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"),
+            "hwp_open",
+            serde_json::json!({ "path": "<열 문서 경로>" }),
+            "핸들이 없거나 만료 — hwp_open 으로 docId 를 재발급한 뒤 재시도",
+        );
+    };
+    let Some(redo_id) = sd.redo_stack.pop() else {
+        return tool_error(
+            "다시 적용할 편집이 없습니다 — hwp_doc_undo 로 되돌린 뒤에만 redo 할 수 있습니다"
+                .into(),
+        );
+    };
+    let undo_id = sd.doc.save_snapshot_native();
+    sd.undo_stack.push(undo_id);
+    if let Err(e) = sd.doc.restore_snapshot_native(redo_id) {
+        sd.undo_stack.pop();
+        sd.doc.discard_snapshot_native(undo_id);
+        return tool_error(format!("redo 실패: {e}"));
+    }
+    sd.doc.discard_snapshot_native(redo_id);
+    tool_ok_text(
+        serde_json::json!({
+            "schemaVersion": "1.0",
+            "docId": doc_id,
+            "redone": true,
+            "canUndo": !sd.undo_stack.is_empty(),
+            "canRedo": !sd.redo_stack.is_empty(),
+            "changedPages": serde_json::Value::Null,
         })
         .to_string(),
     )

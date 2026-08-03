@@ -21,6 +21,8 @@ pub const ALL_SESSION_TOOLS: &[&str] = &[
     "hwp_doc_replace_text",
     "hwp_doc_set_cell",
     "hwp_doc_fill_fields",
+    "hwp_doc_undo",
+    "hwp_doc_redo",
     "hwp_doc_save",
     "hwp_close",
 ];
