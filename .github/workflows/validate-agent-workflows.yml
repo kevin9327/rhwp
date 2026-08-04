@@ -1,0 +1,23 @@
+name: Validate Agent Workflows
+
+on:
+  push:
+    paths:
+      - 'tools/workflow-validator/**'
+  pull_request:
+    paths:
+      - 'tools/workflow-validator/**'
+
+jobs:
+  validate:
+    name: Validate Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r tools/workflow-validator/requirements.txt
+      - name: Validate schema
+        run: python tools/workflow-validator/validator.py tools/workflow-validator/examples/example.yaml

@@ -1,0 +1,9 @@
+name: "Example Workflow"
+version: "1.0.0"
+description: "Example workflow based on playbook"
+steps:
+  - id: step1
+    name: "Example step"
+    command: "echo test"
+    validations:
+      - type: exit_code
