@@ -112,7 +112,7 @@
 <circle cx="904" cy="750" r="0.8" fill="#dbe6ff" opacity="0.19"/>
 <circle cx="131" cy="159" r="1.4" fill="#dbe6ff" opacity="0.18"/>
 <text x="540.0" y="46" font-size="26" fill="#f1f5ff" text-anchor="middle" font-weight="bold" opacity="1.0" letter-spacing="0.5">rhwp 에이전트 로드맵 — 초차원 조망</text>
-<text x="540.0" y="72" font-size="13" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">M100 통합 좌표 · 한 축 정렬 (R1 → R200 → 10년 사다리) · 211 항목 · 2026-08-10 실측</text>
+<text x="540.0" y="72" font-size="13" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">M100 통합 좌표 · 한 축 정렬 (R1 → R200 → 10년 사다리) · 211 항목 · 2026-08-11 실측 — 사다리 1~3년 devel 통합·4년 제출</text>
 <line x1="64" y1="596" x2="1006" y2="596" stroke="url(#axis)" stroke-width="3.5" filter="url(#glow)"/>
 <path d="M 1006 589 L 1022 596 L 1006 603 Z" fill="#e879f9" filter="url(#glow)"/>
 <circle cx="64" cy="596" r="13" fill="#fde68a" filter="url(#glow2)"/>
@@ -222,24 +222,25 @@
 <line x1="296" y1="534" x2="532" y2="590" stroke="#818cf8" stroke-width="1" stroke-dasharray="3 5" opacity="0.5"/>
 <line x1="668" y1="548" x2="986" y2="122" stroke="url(#ladder)" stroke-width="2.5" opacity="0.85" filter="url(#glow)"/>
 <text x="889.0" y="431.0" font-size="14" fill="#f0abfc" text-anchor="middle" font-weight="bold" opacity="1.0">D3 · 시간 (검증 사다리)</text>
-<circle cx="668.0" cy="548.0" r="8" fill="#38bdf8" filter="url(#glow)"/>
-<circle cx="668.0" cy="548.0" r="3.2" fill="#e0f2fe"/>
+<circle cx="668.0" cy="548.0" r="8" fill="#4ade80" filter="url(#glow)"/>
+<circle cx="668.0" cy="548.0" r="3.2" fill="#eafff3"/>
 <text x="668.0" y="532.0" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">1년 영수증</text>
-<text x="668.0" y="544.0" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4392</text>
-<circle cx="699.8" cy="505.4" r="8" fill="#38bdf8" filter="url(#glow)"/>
-<circle cx="699.8" cy="505.4" r="3.2" fill="#e0f2fe"/>
+<text x="668.0" y="544.0" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">devel 통합</text>
+<circle cx="699.8" cy="505.4" r="8" fill="#4ade80" filter="url(#glow)"/>
+<circle cx="699.8" cy="505.4" r="3.2" fill="#eafff3"/>
 <text x="699.8" y="529.4" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">2년 감사</text>
-<text x="699.8" y="541.4" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4399</text>
-<circle cx="731.6" cy="462.8" r="8" fill="#38bdf8" filter="url(#glow)"/>
-<circle cx="731.6" cy="462.8" r="3.2" fill="#e0f2fe"/>
+<text x="699.8" y="541.4" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">devel 통합</text>
+<circle cx="731.6" cy="462.8" r="8" fill="#4ade80" filter="url(#glow)"/>
+<circle cx="731.6" cy="462.8" r="3.2" fill="#eafff3"/>
 <text x="731.6" y="446.8" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">3년 계보</text>
-<text x="731.6" y="458.8" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4406</text>
+<text x="731.6" y="458.8" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">devel 통합</text>
 <circle cx="763.4" cy="420.2" r="7.5" fill="#0d1226" stroke="#e879f9" stroke-width="2"/>
 <text x="763.4" y="444.2" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">합류 DAG</text>
 <text x="763.4" y="456.2" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4410</text>
-<circle cx="795.2" cy="377.6" r="7.5" fill="#0d1226" stroke="#e879f9" stroke-width="2"/>
+<circle cx="795.2" cy="377.6" r="8" fill="#38bdf8" filter="url(#glow)"/>
+<circle cx="795.2" cy="377.6" r="3.2" fill="#e0f2fe"/>
 <text x="795.2" y="361.6" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">4년 서명</text>
-<text x="795.2" y="373.6" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4455</text>
+<text x="795.2" y="373.6" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">PR #4511</text>
 <circle cx="827.0" cy="335.0" r="7.5" fill="#0d1226" stroke="#e879f9" stroke-width="2"/>
 <text x="827.0" y="359.0" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">5년 앵커</text>
 <text x="827.0" y="371.0" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4456</text>
@@ -259,10 +260,12 @@
 <text x="986.0" y="106.0" font-size="10.5" fill="#e8edfa" text-anchor="middle" font-weight="bold" opacity="1.0">10년 표준</text>
 <text x="986.0" y="118.0" font-size="9" fill="#8fa3cc" text-anchor="middle" font-weight="normal" opacity="1.0">#4461</text>
 <line x1="668" y1="548" x2="832" y2="590" stroke="#e879f9" stroke-width="1" stroke-dasharray="3 5" opacity="0.5"/>
-<circle cx="672" cy="88" r="6.5" fill="#38bdf8"/>
-<text x="684" y="92" font-size="10" fill="#9fb0d6" text-anchor="start" font-weight="normal" opacity="1.0">구현 PR 제출(머지 대기)</text>
-<circle cx="836" cy="88" r="6" fill="#0d1226" stroke="#e879f9" stroke-width="2"/>
-<text x="848" y="92" font-size="10" fill="#9fb0d6" text-anchor="start" font-weight="normal" opacity="1.0">[지평] 설계서 PR</text>
+<circle cx="600" cy="88" r="6.5" fill="#4ade80"/>
+<text x="612" y="92" font-size="10" fill="#9fb0d6" text-anchor="start" font-weight="normal" opacity="1.0">devel 통합</text>
+<circle cx="700" cy="88" r="6.5" fill="#38bdf8"/>
+<text x="712" y="92" font-size="10" fill="#9fb0d6" text-anchor="start" font-weight="normal" opacity="1.0">구현 PR 제출</text>
+<circle cx="820" cy="88" r="6" fill="#0d1226" stroke="#e879f9" stroke-width="2"/>
+<text x="832" y="92" font-size="10" fill="#9fb0d6" text-anchor="start" font-weight="normal" opacity="1.0">[지평] 설계 머지</text>
 <text x="96" y="676" font-size="12.5" fill="#fbbf24" text-anchor="start" font-weight="bold" opacity="1.0">D4 · 실행 깊이</text>
 <circle cx="216" cy="672" r="5" fill="#fbbf24" opacity="0.35"/>
 <line x1="224" y1="672" x2="308" y2="672" stroke="#fbbf24" stroke-width="1" opacity="0.35"/>
