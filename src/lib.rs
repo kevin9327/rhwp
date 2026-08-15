@@ -21,6 +21,7 @@ pub mod password_crypto;
 pub mod plan_schema;
 pub mod provenance;
 pub mod renderer;
+pub mod scaffold;
 pub mod schema_registry;
 pub mod serializer;
 /// 핫패치 벤더(Dioxus subsecond) 어댑터. **rhwp 의 API 가 아니다** (#4580).
