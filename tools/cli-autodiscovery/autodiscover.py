@@ -198,6 +198,7 @@ class JSONSchemaExtractor:
                     [str(self.rhwp_binary), command.name, str(sample_file), '--json'],
                     capture_output=True,
                     text=True,
+                    encoding='utf-8',
                     timeout=30
                 )
                 if result.returncode == 0 and result.stdout:
@@ -544,6 +545,7 @@ class CLIAutodiscovery:
                 [str(self.rhwp_binary), '--help'],
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
                 timeout=10
             )
             return result.stdout
@@ -589,6 +591,10 @@ class CLIAutodiscovery:
 
 
 def main():
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+
     parser = argparse.ArgumentParser(
         description='rhwp CLI 자동 발견 및 문서화 도구'
     )
