@@ -232,6 +232,43 @@ mod tests {
         assert!(e.contains("subscript") && e.contains("superscript"), "{e}");
     }
 
+    /// color/font_size 가 실제로 char_shape 로 왕복된다.
+    #[test]
+    fn color_and_font_size_round_trip_to_char_shape() {
+        let spec = parse_scaffold_str(
+            r##"{"version":"1","blocks":[
+                {"type":"paragraph","text":"a","style":{"color":"#FF0000"}},
+                {"type":"paragraph","text":"b","style":{"font_size":20.0}}
+            ]}"##,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let cs_of = |text: &str| -> crate::model::style::CharShape {
+            let p = reparsed.sections[0]
+                .paragraphs
+                .iter()
+                .find(|p| p.text == text)
+                .unwrap();
+            let cs_id = p.char_shapes[0].char_shape_id as usize;
+            reparsed.doc_info.char_shapes[cs_id].clone()
+        };
+        assert_eq!(cs_of("a").text_color, 0x00FF0000);
+        assert_eq!(cs_of("b").base_size, 2000); // 20pt * 100
+    }
+
+    /// `color`가 `"#RRGGBB"` 형식이 아니면 즉시 거부된다.
+    #[test]
+    fn invalid_color_format_is_rejected() {
+        let e = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"paragraph","text":"x","style":{"color":"red"}}]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("color"), "{e}");
+    }
+
     /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
     /// 생성하지 않는다.
     #[test]
