@@ -58,7 +58,7 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
     // char_shape 축이라 서로 독립적으로 찾거나 만든다(둘 다 PS_NORMAL/CS_NORMAL
     // 을 clone하고 해당 속성만 바꿔 재사용).
     let mut align_ps_cache: Vec<(ParagraphAlign, u16)> = Vec::new();
-    let mut char_style_cs_cache: Vec<((bool, bool, bool, bool, bool, bool), u32)> = Vec::new();
+    let mut char_style_cache: Vec<(ParagraphStyle, u32)> = Vec::new();
 
     // 문서 제목 — 가운데 정렬 제목 문단.
     if let Some(title) = spec
@@ -82,20 +82,26 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
                     .push(make_text_para(text, ps_id, CS_HEADING));
             }
             Block::Paragraph { text, style } => {
-                let ps_id = match style.and_then(|s| s.align) {
+                let ps_id = match style.as_ref().and_then(|s| s.align) {
                     None | Some(ParagraphAlign::Justify) => PS_NORMAL,
                     Some(a) => resolve_align_para_shape(&mut doc, &mut align_ps_cache, a),
                 };
-                let affects_char_shape = style.is_some_and(|s| {
+                let affects_char_shape = style.as_ref().is_some_and(|s| {
                     s.bold.is_some()
                         || s.italic.is_some()
                         || s.underline.is_some()
                         || s.strikethrough.is_some()
                         || s.subscript.is_some()
                         || s.superscript.is_some()
+                        || s.color.is_some()
+                        || s.font_size.is_some()
                 });
                 let cs_id = if affects_char_shape {
-                    resolve_style_char_shape(&mut doc, &mut char_style_cs_cache, (*style).unwrap())
+                    resolve_style_char_shape(
+                        &mut doc,
+                        &mut char_style_cache,
+                        style.clone().unwrap(),
+                    )
                 } else {
                     CS_NORMAL
                 };
@@ -149,41 +155,65 @@ fn resolve_align_para_shape(
     id
 }
 
-/// `style` 의 bold/italic/underline/strikethrough/subscript/superscript 가 쓸
-/// char_shape_id 를 찾거나(캐시 적중) 새로 만든다(`CS_NORMAL` 을 clone 하고
-/// 해당 속성만 바꿔 `doc.doc_info.char_shapes` 뒤에 덧붙임 — 정렬은 이 함수와
-/// 독립적으로 `resolve_align_para_shape` 가 맡는다).
+/// `"#RRGGBB"` → `ColorRef`(HWP 내부 표현, 상위 바이트 0=유효 색상). 형식은
+/// `ParagraphStyle::validate` 가 파싱 시점에 이미 보장한다.
+fn parse_hex_color(hex: &str) -> u32 {
+    u32::from_str_radix(&hex[1..], 16).unwrap_or(0)
+}
+
+/// pt 를 HWPUNIT 으로 변환(1pt = 1/72인치 = HWPUNIT 100).
+fn pt_to_hwpunit(pt: f32) -> i32 {
+    (pt.max(0.0) * 100.0).round() as i32
+}
+
+/// `style` 의 char_shape 축 필드(bold/italic/underline/strikethrough/
+/// subscript/superscript/color/font_size)가 쓸 char_shape_id 를 찾거나(캐시
+/// 적중) 새로 만든다(`CS_NORMAL` 을 clone 하고 해당 속성만 바꿔
+/// `doc.doc_info.char_shapes` 뒤에 덧붙임 — 정렬 이하 para_shape 축은 이
+/// 함수와 독립적으로 `resolve_align_para_shape` 가 맡는다). 캐시는 전체
+/// `ParagraphStyle`(이미 `PartialEq`)을 키로 선형 비교한다 — 필드가 늘어도
+/// 캐시 키 튜플을 다시 넓힐 필요가 없다.
 fn resolve_style_char_shape(
     doc: &mut Document,
-    cache: &mut Vec<((bool, bool, bool, bool, bool, bool), u32)>,
+    cache: &mut Vec<(ParagraphStyle, u32)>,
     style: ParagraphStyle,
 ) -> u32 {
-    let key = (
-        style.bold.unwrap_or(false),
-        style.italic.unwrap_or(false),
-        style.underline.unwrap_or(false),
-        style.strikethrough.unwrap_or(false),
-        style.subscript.unwrap_or(false),
-        style.superscript.unwrap_or(false),
-    );
-    if let Some((_, id)) = cache.iter().find(|(k, _)| *k == key) {
+    if let Some((_, id)) = cache.iter().find(|(s, _)| *s == style) {
         return *id;
     }
     use crate::model::style::UnderlineType;
     let mut cs = doc.doc_info.char_shapes[CS_NORMAL as usize].clone();
-    cs.bold = key.0;
-    cs.italic = key.1;
-    cs.underline_type = if key.2 {
-        UnderlineType::Bottom
-    } else {
-        UnderlineType::None
-    };
-    cs.strikethrough = key.3;
-    cs.subscript = key.4;
-    cs.superscript = key.5;
+    if let Some(v) = style.bold {
+        cs.bold = v;
+    }
+    if let Some(v) = style.italic {
+        cs.italic = v;
+    }
+    if let Some(v) = style.underline {
+        cs.underline_type = if v {
+            UnderlineType::Bottom
+        } else {
+            UnderlineType::None
+        };
+    }
+    if let Some(v) = style.strikethrough {
+        cs.strikethrough = v;
+    }
+    if let Some(v) = style.subscript {
+        cs.subscript = v;
+    }
+    if let Some(v) = style.superscript {
+        cs.superscript = v;
+    }
+    if let Some(hex) = &style.color {
+        cs.text_color = parse_hex_color(hex);
+    }
+    if let Some(pt) = style.font_size {
+        cs.base_size = pt_to_hwpunit(pt);
+    }
     let id = doc.doc_info.char_shapes.len() as u32;
     doc.doc_info.char_shapes.push(cs);
-    cache.push((key, id));
+    cache.push((style, id));
     id
 }
 

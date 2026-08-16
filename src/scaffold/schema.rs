@@ -73,7 +73,7 @@ pub enum ParagraphAlign {
 /// 따로 추가하지 않고, 왕복 검증을 마친 서식 축을 이 구조체 하나에 계속
 /// 얹어 나간다(스키마 문법 변경 없이 확장). 전부 선택 필드이며 생략하면
 /// 문서 기본값(양쪽맞춤·보통체)을 쓴다.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ParagraphStyle {
     #[serde(default)]
@@ -95,6 +95,14 @@ pub struct ParagraphStyle {
     /// 위 첨자(예: 제곱 x², 각주 번호, 서수 1st). `subscript`와 상호 배타.
     #[serde(default)]
     pub superscript: Option<bool>,
+    /// 글자 색 `"#RRGGBB"`(6자리 16진수, `#` 포함 7글자). 형식이 다르면 즉시
+    /// 거부. 강조 문구(경고·긴급)나 서명란 안내문 등에 쓴다.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// 글자 크기(pt). 제목·각주처럼 본문과 다른 크기가 필요한 문단에 쓴다 —
+    /// heading 블록의 고정 크기 체계와 별개로 문단 단위 임의 크기를 준다.
+    #[serde(default)]
+    pub font_size: Option<f32>,
 }
 
 impl ParagraphStyle {
@@ -108,15 +116,27 @@ impl ParagraphStyle {
             && self.strikethrough.is_none()
             && self.subscript.is_none()
             && self.superscript.is_none()
+            && self.color.is_none()
+            && self.font_size.is_none()
     }
 
-    /// `subscript`와 `superscript`를 동시에 `true`로 주면 즉시 거부한다(관용
-    /// 파싱 금지 — 이 모듈의 확립된 원칙).
+    /// `subscript`/`superscript` 동시 지정, `color` 형식 오류를 즉시 거부한다
+    /// (관용 파싱 금지 — 이 모듈의 확립된 원칙).
     fn validate(&self) -> Result<(), String> {
         if self.subscript == Some(true) && self.superscript == Some(true) {
             return Err(
                 "style.subscript 와 style.superscript 를 동시에 true 로 줄 수 없습니다".to_string(),
             );
+        }
+        if let Some(c) = &self.color {
+            let valid = c.len() == 7
+                && c.starts_with('#')
+                && c[1..].chars().all(|ch| ch.is_ascii_hexdigit());
+            if !valid {
+                return Err(format!(
+                    "style.color 는 \"#RRGGBB\" 형식이어야 합니다 (받음: {c:?})"
+                ));
+            }
         }
         Ok(())
     }
