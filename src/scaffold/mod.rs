@@ -379,6 +379,57 @@ mod tests {
         assert!(e.contains("background_color"), "{e}");
     }
 
+    /// 표 셀 `vertical_align` 이 실제로 셀 IR 로 왕복되고, 미지정 셀은 기본
+    /// (가운데)을 쓴다.
+    #[test]
+    fn cell_vertical_align_round_trips() {
+        use crate::model::table::VerticalAlign;
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","rows":[
+                [{"text":"위","vertical_align":"top"},{"text":"아래","vertical_align":"bottom"},"기본"]
+            ]}]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let table = reparsed.sections[0]
+            .paragraphs
+            .iter()
+            .find_map(|p| {
+                p.controls.iter().find_map(|c| match c {
+                    Control::Table(t) => Some(t),
+                    _ => None,
+                })
+            })
+            .expect("표를 찾지 못함");
+        let va_of = |col: u16| {
+            table
+                .cells
+                .iter()
+                .find(|c| c.col == col && c.row == 0)
+                .unwrap()
+                .vertical_align
+        };
+        assert_eq!(va_of(0), VerticalAlign::Top);
+        assert_eq!(va_of(1), VerticalAlign::Bottom);
+        assert_eq!(va_of(2), VerticalAlign::Center);
+    }
+
+    /// `vertical_align` 에 알 수 없는 값을 주면 즉시 거부된다.
+    #[test]
+    fn invalid_cell_vertical_align_is_rejected() {
+        let e = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","rows":[[{"text":"x","vertical_align":"middle"}]]}]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            e.contains("unknown variant") || e.contains("vertical_align") || e.contains("middle"),
+            "{e}"
+        );
+    }
+
     /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
     /// 생성하지 않는다.
     #[test]
