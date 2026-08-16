@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::paragraph::TitleMark;
 use crate::parser::tags;
 
 /// 테스트용 레코드 바이너리 생성
@@ -44,7 +45,11 @@ fn hancom_single_odd_master_flag_is_not_parsed_as_both() {
 
 #[test]
 fn test_parse_para_text_simple() {
-    let (text, offsets, _, _) = parse_para_text(&make_para_text_data("Hello, World!"));
+    let ParaTextParts {
+        text,
+        char_offsets: offsets,
+        ..
+    } = parse_para_text(&make_para_text_data("Hello, World!"));
     assert_eq!(text, "Hello, World!");
     assert_eq!(offsets.len(), 13);
     assert_eq!(offsets[0], 0); // 'H' at position 0
@@ -52,7 +57,11 @@ fn test_parse_para_text_simple() {
 
 #[test]
 fn test_parse_para_text_korean() {
-    let (text, offsets, _, _) = parse_para_text(&make_para_text_data("한글 테스트입니다."));
+    let ParaTextParts {
+        text,
+        char_offsets: offsets,
+        ..
+    } = parse_para_text(&make_para_text_data("한글 테스트입니다."));
     assert_eq!(text, "한글 테스트입니다.");
     assert_eq!(offsets.len(), text.chars().count());
 }
@@ -69,7 +78,11 @@ fn test_parse_para_text_with_tab() {
     }
     data.extend_from_slice(&0x0042u16.to_le_bytes()); // 'B'
     data.extend_from_slice(&0x000Du16.to_le_bytes()); // para break
-    let (text, offsets, _, _) = parse_para_text(&data);
+    let ParaTextParts {
+        text,
+        char_offsets: offsets,
+        ..
+    } = parse_para_text(&data);
     assert_eq!(text, "A\tB");
     // 'A' at code unit 0, tab takes 8 units (1-8), 'B' at code unit 9
     assert_eq!(offsets, vec![0, 1, 9]);
@@ -87,7 +100,11 @@ fn test_parse_para_text_with_extended_ctrl() {
     }
     data.extend_from_slice(&0x0042u16.to_le_bytes()); // 'B'
     data.extend_from_slice(&0x000Du16.to_le_bytes()); // para break
-    let (text, offsets, _, _) = parse_para_text(&data);
+    let ParaTextParts {
+        text,
+        char_offsets: offsets,
+        ..
+    } = parse_para_text(&data);
     assert_eq!(text, "AB");
     // 'A' at code unit 0, extended ctrl takes 8 units (1-8), 'B' at code unit 9
     assert_eq!(offsets, vec![0, 9]);
@@ -97,7 +114,11 @@ fn test_parse_para_text_with_extended_ctrl() {
 fn test_parse_para_text_empty() {
     // 문단 끝만 있는 경우
     let data = 0x000Du16.to_le_bytes();
-    let (text, offsets, _, _) = parse_para_text(&data);
+    let ParaTextParts {
+        text,
+        char_offsets: offsets,
+        ..
+    } = parse_para_text(&data);
     assert_eq!(text, "");
     assert!(offsets.is_empty());
 }
@@ -851,4 +872,279 @@ fn test_table_paragraph_diagnostics() {
     }
 
     eprintln!("=== 진단 완료 ===\n");
+}
+
+/// 제목 차례 표시(`Mtit`/`Mign`)를 통째로 흘리면 문단 축이 8유닛 짧아진다.
+///
+/// 한글은 축이 어긋난 `<hp:lineseg textpos>` 를 만나면 본문을 통째로 버리므로
+/// (10k 스윕 F-절단군), 텍스트에 싣지 않되 위치는 반드시 남겨야 한다.
+#[test]
+fn title_mark_is_preserved_as_eight_unit_slot() {
+    // [Mtit 16바이트][가][나]
+    let mut data = Vec::new();
+    data.extend_from_slice(&0x0008u16.to_le_bytes());
+    data.extend_from_slice(&tags::CTRL_TITLE_MARK_IGNORE_ON.to_le_bytes());
+    for _ in 0..4 {
+        data.extend_from_slice(&0u16.to_le_bytes());
+    }
+    data.extend_from_slice(&0x0008u16.to_le_bytes());
+    for ch in "가나".encode_utf16() {
+        data.extend_from_slice(&ch.to_le_bytes());
+    }
+    data.extend_from_slice(&0x000Du16.to_le_bytes());
+
+    let parts = parse_para_text(&data);
+    assert_eq!(parts.text, "가나", "표시는 텍스트가 아니다");
+    assert_eq!(
+        parts.char_offsets,
+        vec![8, 9],
+        "표시가 앞 8유닛을 점유하므로 첫 글자는 8 에서 시작한다"
+    );
+    assert_eq!(
+        parts.title_marks,
+        vec![TitleMark {
+            char_idx: 0,
+            ignore: true,
+        }]
+    );
+}
+
+/// `Mign` 은 같은 자리의 `ignore="0"` 짝이다 — 한글 2022 양방향 실측(06699).
+#[test]
+fn title_mark_ignore_off_variant_is_distinguished() {
+    let mut data = Vec::new();
+    for ch in "가".encode_utf16() {
+        data.extend_from_slice(&ch.to_le_bytes());
+    }
+    data.extend_from_slice(&0x0008u16.to_le_bytes());
+    data.extend_from_slice(&tags::CTRL_TITLE_MARK_IGNORE_OFF.to_le_bytes());
+    for _ in 0..4 {
+        data.extend_from_slice(&0u16.to_le_bytes());
+    }
+    data.extend_from_slice(&0x0008u16.to_le_bytes());
+    data.extend_from_slice(&0x000Du16.to_le_bytes());
+
+    let parts = parse_para_text(&data);
+    assert_eq!(parts.text, "가");
+    assert_eq!(
+        parts.title_marks,
+        vec![TitleMark {
+            char_idx: 1,
+            ignore: false,
+        }],
+        "글자 뒤에 붙은 표시도 위치가 남아야 한다"
+    );
+}
+
+/// 0x08 이라도 알려지지 않은 ctrl_id 는 표시로 오인하지 않는다.
+#[test]
+fn unknown_inline_ctrl_id_is_not_taken_for_a_title_mark() {
+    let mut data = Vec::new();
+    data.extend_from_slice(&0x0008u16.to_le_bytes());
+    data.extend_from_slice(&u32::from_le_bytes(*b"zzzz").to_le_bytes());
+    for _ in 0..4 {
+        data.extend_from_slice(&0u16.to_le_bytes());
+    }
+    data.extend_from_slice(&0x0008u16.to_le_bytes());
+    data.extend_from_slice(&0x000Du16.to_le_bytes());
+
+    assert!(parse_para_text(&data).title_marks.is_empty());
+}
+
+/// 짝 FIELD_BEGIN 이 앞 문단에 있는 종료 마커도 8유닛 슬롯을 지켜야 한다.
+///
+/// 종전에는 스택이 비면 아무것도 남기지 않고 흘려보냈다. 그러면 축이 8유닛 짧아져
+/// 그 문단의 lineseg 가 범위 밖이 되고 조판이 통째로 버려진다(01752 실측).
+#[test]
+fn orphan_field_end_is_preserved_as_a_slot() {
+    let mut data = Vec::new();
+    for ch in "가나".encode_utf16() {
+        data.extend_from_slice(&ch.to_le_bytes());
+    }
+    // FIELD_END 16바이트 (짝 BEGIN 없음)
+    data.extend_from_slice(&0x0004u16.to_le_bytes());
+    data.extend_from_slice(&u32::from_le_bytes(*b"klc\x09").to_le_bytes());
+    for _ in 0..4 {
+        data.extend_from_slice(&0u16.to_le_bytes());
+    }
+    data.extend_from_slice(&0x0004u16.to_le_bytes());
+    data.extend_from_slice(&0x000Du16.to_le_bytes());
+
+    let parts = parse_para_text(&data);
+    assert_eq!(parts.text, "가나");
+    assert_eq!(
+        parts.field_ranges.len(),
+        0,
+        "짝이 없으니 범위는 만들지 않는다"
+    );
+    assert_eq!(parts.orphan_field_ends.len(), 1);
+    assert_eq!(parts.orphan_field_ends[0].char_idx, 2, "글자 뒤에 놓인다");
+}
+
+/// 종료 마커는 앞 문단에서 열린 필드의 id 를 물려받아야 한다.
+///
+/// 매달린 참조(`beginIDRef="0"`)를 내보내면 한글이 **파일을 열지 못한다**(01752 실측).
+#[test]
+fn orphan_field_end_links_to_the_open_field_id() {
+    use crate::model::control::{Field, FieldType};
+    use crate::model::paragraph::OrphanFieldEnd;
+
+    let mut opener = Paragraph {
+        text: "가".to_string(),
+        ..Default::default()
+    };
+    opener.controls.push(Control::Field(Field {
+        field_type: FieldType::ClickHere,
+        field_id: 2031845287,
+        ..Default::default()
+    }));
+
+    let closer = Paragraph {
+        text: "나".to_string(),
+        orphan_field_ends: vec![OrphanFieldEnd {
+            char_idx: 1,
+            begin_id_ref: 0,
+            field_id: 0,
+            begin_ctrl_id: 0,
+        }],
+        ..Default::default()
+    };
+
+    let mut paras = vec![opener, closer];
+    link_orphan_field_ends(&mut paras);
+    assert_eq!(paras[1].orphan_field_ends[0].begin_id_ref, 2031845287);
+}
+
+/// 같은 문단에서 닫힌 필드는 열린 채로 쌓지 않는다 — 뒤 문단의 마커가 엉뚱한 필드를
+/// 가리키면 안 된다.
+#[test]
+fn field_closed_in_its_own_paragraph_is_not_left_open() {
+    use crate::model::control::{Field, FieldType};
+    use crate::model::paragraph::{FieldRange, OrphanFieldEnd};
+
+    let mut closed = Paragraph {
+        text: "가".to_string(),
+        ..Default::default()
+    };
+    closed.controls.push(Control::Field(Field {
+        field_type: FieldType::ClickHere,
+        field_id: 111,
+        ..Default::default()
+    }));
+    closed.field_ranges.push(FieldRange {
+        start_char_idx: 0,
+        end_char_idx: 1,
+        control_idx: 0,
+        end_field_id: 0,
+        inner_slot_count: 0,
+    });
+
+    let stray = Paragraph {
+        orphan_field_ends: vec![OrphanFieldEnd {
+            char_idx: 0,
+            begin_id_ref: 0,
+            field_id: 0,
+            begin_ctrl_id: 0,
+        }],
+        ..Default::default()
+    };
+
+    let mut paras = vec![closed, stray];
+    link_orphan_field_ends(&mut paras);
+    assert_eq!(
+        paras[1].orphan_field_ends[0].begin_id_ref, 0,
+        "짝을 못 찾으면 0 으로 남긴다 — 없는 id 를 지어내지 않는다"
+    );
+}
+
+// ==========================================================================
+// [#4827] 문단↔표↔셀 상호재귀 깊이 상한 회귀 — 손상 문서 스택 오버플로 DoS 가드
+// ==========================================================================
+
+/// 표 `depth` 겹을 선형 중첩한 BodyText 레코드 바이트 스트림을 만든다.
+///
+/// 한 겹 = PARA_HEADER(L) → CTRL_HEADER(L+1, `tbl `) → HWPTAG_TABLE(L+2) →
+/// LIST_HEADER(L+2, 셀). 셀 안의 다음 PARA_HEADER 는 L+3 — 즉 표 한 겹이 레코드 레벨을 3 판다.
+/// 레벨 필드는 10비트(≤1023)라 이 방식으로 최대 ~341겹까지 만들 수 있다(실파일 도달 한계).
+fn build_nested_table_stream(depth: u16) -> Vec<u8> {
+    let para = make_para_header_data(0, 0, 0);
+    let table_data = [0u8; 4];
+    let cell_data = [0u8; 32];
+    let ctrl = tags::CTRL_TABLE.to_le_bytes();
+
+    let mut bytes = Vec::new();
+    for k in 0..depth {
+        let l = 3 * k;
+        bytes.extend(make_record_bytes(tags::HWPTAG_PARA_HEADER, l, &para));
+        bytes.extend(make_record_bytes(tags::HWPTAG_CTRL_HEADER, l + 1, &ctrl));
+        bytes.extend(make_record_bytes(tags::HWPTAG_TABLE, l + 2, &table_data));
+        bytes.extend(make_record_bytes(
+            tags::HWPTAG_LIST_HEADER,
+            l + 2,
+            &cell_data,
+        ));
+    }
+    bytes.extend(make_record_bytes(
+        tags::HWPTAG_PARA_HEADER,
+        3 * depth,
+        &para,
+    ));
+    bytes
+}
+
+/// 파싱된 문단 트리에서 최대 표 중첩 깊이를 잰다(표→셀→문단 재귀).
+fn max_table_nesting(paras: &[crate::model::paragraph::Paragraph]) -> usize {
+    let mut best = 0;
+    for p in paras {
+        for c in &p.controls {
+            if let Control::Table(t) = c {
+                let mut deepest = 0;
+                for cell in &t.cells {
+                    deepest = deepest.max(max_table_nesting(&cell.paragraphs));
+                }
+                best = best.max(1 + deepest);
+            }
+        }
+    }
+    best
+}
+
+#[test]
+fn nested_table_recursion_is_depth_capped() {
+    // 상한(64)을 크게 넘는 표 중첩을 파싱해도 크래시 없이 완주하고, 결과 트리의 표 중첩
+    // 깊이가 상한 이내로 절단돼야 한다. 가드가 없으면 이 입력은 341겹 근처에서 스택을
+    // 고갈시켜 SIGSEGV 를 내거나(비결정적) 입력 깊이 그대로 내려간다. 넉넉한 스택 전용
+    // 스레드에서 경계를 결정론적으로 시험한다(HWPX #4759 형제 테스트와 같은 방식).
+    let input_depth = MAX_HWP5_SECTION_DEPTH + 40;
+    let nesting = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let stream = build_nested_table_stream(input_depth as u16);
+            let section = parse_body_text_section(&stream).expect("파싱은 성공(하위 트리만 절단)");
+            max_table_nesting(&section.paragraphs)
+        })
+        .expect("파서 스레드 생성 실패")
+        .join()
+        .expect("파서 스레드 패닉");
+
+    assert!(
+        nesting <= MAX_HWP5_SECTION_DEPTH as usize,
+        "표 중첩이 상한을 넘겨 절단되지 않았다 — 상호재귀 깊이 가드 회귀 (nesting={nesting})"
+    );
+    assert!(
+        nesting >= 8,
+        "가드가 얕은 깊이에서 과잉 차단했다 (nesting={nesting})"
+    );
+}
+
+#[test]
+fn shallow_table_nesting_is_preserved() {
+    // 상한 안쪽의 정상적인 표 중첩은 깊이 그대로 보존돼야 한다(가드가 과잉 차단 안 함).
+    let stream = build_nested_table_stream(5);
+    let section = parse_body_text_section(&stream).expect("파싱 실패");
+    assert_eq!(
+        max_table_nesting(&section.paragraphs),
+        5,
+        "정상 깊이(5겹) 표 중첩이 보존되지 않았다 — 가드 과잉 차단"
+    );
 }
