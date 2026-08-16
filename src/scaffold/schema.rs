@@ -114,6 +114,18 @@ pub struct ParagraphStyle {
     /// 번호 뒤 내어쓰기(음수)나 문단 첫 줄만 들여쓰는 관행(양수)에 쓴다.
     #[serde(default)]
     pub indent: Option<f32>,
+    /// 문단 간격 위(pt). 절 제목 앞에 여백을 두는 등, 문단 사이 시각적
+    /// 구분에 쓴다.
+    #[serde(default)]
+    pub spacing_before: Option<f32>,
+    /// 문단 간격 아래(pt).
+    #[serde(default)]
+    pub spacing_after: Option<f32>,
+    /// 줄 간격(%, 문서 기본값 160). 서명란처럼 줄 사이를 넓게 벌려 실제
+    /// 서명 공간을 만들거나, 표 안 안내문처럼 좁게 눌러 담아야 하는
+    /// 문단에 쓴다.
+    #[serde(default)]
+    pub line_spacing_percent: Option<u16>,
 }
 
 impl ParagraphStyle {
@@ -132,6 +144,9 @@ impl ParagraphStyle {
             && self.margin_left.is_none()
             && self.margin_right.is_none()
             && self.indent.is_none()
+            && self.spacing_before.is_none()
+            && self.spacing_after.is_none()
+            && self.line_spacing_percent.is_none()
     }
 
     /// `subscript`/`superscript` 동시 지정, `color` 형식 오류를 즉시 거부한다

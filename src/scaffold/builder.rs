@@ -87,6 +87,9 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
                         || s.margin_left.is_some()
                         || s.margin_right.is_some()
                         || s.indent.is_some()
+                        || s.spacing_before.is_some()
+                        || s.spacing_after.is_some()
+                        || s.line_spacing_percent.is_some()
                 });
                 let ps_id = if affects_para_shape {
                     resolve_para_style(&mut doc, &mut para_style_cache, style.clone().unwrap())
@@ -173,6 +176,15 @@ fn resolve_para_style(
     }
     if let Some(mm) = style.indent {
         ps.indent = mm_to_hwpunit_signed(mm);
+    }
+    if let Some(pt) = style.spacing_before {
+        ps.spacing_before = pt_to_hwpunit(pt);
+    }
+    if let Some(pt) = style.spacing_after {
+        ps.spacing_after = pt_to_hwpunit(pt);
+    }
+    if let Some(pct) = style.line_spacing_percent {
+        ps.line_spacing = pct as i32;
     }
     let id = doc.doc_info.para_shapes.len() as u16;
     doc.doc_info.para_shapes.push(ps);
