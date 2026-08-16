@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn build_serializes_to_hwpx() {
-        let doc = build_scaffold(&full_spec());
+        let doc = build_scaffold(&full_spec()).unwrap();
         let bytes = serialize_hwpx(&doc).expect("scaffold 문서는 HWPX 로 직렬화되어야 한다");
         assert!(
             bytes.len() > 100,
@@ -88,7 +88,7 @@ mod tests {
     /// 왕복 안정성: 생성 바이트를 파싱→재직렬화→재파싱했을 때 IR 차이가 없어야 한다.
     #[test]
     fn roundtrip_ir_is_stable() {
-        let doc = build_scaffold(&full_spec());
+        let doc = build_scaffold(&full_spec()).unwrap();
         let bytes = serialize_hwpx(&doc).unwrap();
         let diff = roundtrip_ir_diff(&bytes).expect("왕복 IR diff 계산");
         assert!(
@@ -101,7 +101,7 @@ mod tests {
     /// 본문 문단 텍스트가 바이트 그대로 복원된다.
     #[test]
     fn paragraph_text_round_trips_verbatim() {
-        let doc = build_scaffold(&full_spec());
+        let doc = build_scaffold(&full_spec()).unwrap();
         let bytes = serialize_hwpx(&doc).unwrap();
         let reparsed = parse_hwpx(&bytes).expect("생성 HWPX 재파싱");
         let texts: Vec<String> = reparsed.sections[0]
@@ -125,10 +125,123 @@ mod tests {
         );
     }
 
+    /// `style.align` 이 실제로 para_shape 의 alignment 로 왕복되고, 미지정 문단은
+    /// 기본(PS_NORMAL, justify)을 그대로 쓴다.
+    #[test]
+    fn paragraph_align_round_trips_to_para_shape() {
+        use crate::model::style::Alignment;
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"왼쪽","style":{"align":"left"}},
+                {"type":"paragraph","text":"가운데","style":{"align":"center"}},
+                {"type":"paragraph","text":"기본"}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let paras = &reparsed.sections[0].paragraphs;
+        let align_of = |text: &str| -> Alignment {
+            let p = paras.iter().find(|p| p.text == text).unwrap_or_else(|| {
+                panic!(
+                    "문단을 못 찾음: {text} (실제: {:?})",
+                    paras.iter().map(|p| &p.text).collect::<Vec<_>>()
+                )
+            });
+            reparsed.doc_info.para_shapes[p.para_shape_id as usize].alignment
+        };
+        assert_eq!(align_of("왼쪽"), Alignment::Left);
+        assert_eq!(align_of("가운데"), Alignment::Center);
+        assert_eq!(align_of("기본"), Alignment::Justify);
+    }
+
+    /// `style.bold`/`italic`/`underline` 이 실제로 char_shape 로 왕복된다.
+    #[test]
+    fn paragraph_char_style_round_trips_to_char_shape() {
+        use crate::model::style::UnderlineType;
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"굵게","style":{"bold":true}},
+                {"type":"paragraph","text":"기울임+밑줄","style":{"italic":true,"underline":true}},
+                {"type":"paragraph","text":"기본"}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let paras = &reparsed.sections[0].paragraphs;
+        let cs_of = |text: &str| -> crate::model::style::CharShape {
+            let p = paras.iter().find(|p| p.text == text).unwrap();
+            let cs_id = p.char_shapes[0].char_shape_id as usize;
+            reparsed.doc_info.char_shapes[cs_id].clone()
+        };
+        let bold = cs_of("굵게");
+        assert!(bold.bold);
+        assert!(!bold.italic);
+        assert_eq!(bold.underline_type, UnderlineType::None);
+
+        let styled = cs_of("기울임+밑줄");
+        assert!(!styled.bold);
+        assert!(styled.italic);
+        assert_eq!(styled.underline_type, UnderlineType::Bottom);
+
+        let normal = cs_of("기본");
+        assert!(!normal.bold);
+        assert!(!normal.italic);
+        assert_eq!(normal.underline_type, UnderlineType::None);
+    }
+
+    /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
+    /// 생성하지 않는다.
+    #[test]
+    fn repeated_style_reuses_same_shapes() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"a","style":{"align":"right","bold":true}},
+                {"type":"paragraph","text":"b","style":{"align":"right","bold":true}},
+                {"type":"paragraph","text":"c","style":{"align":"right","bold":true}}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let selected: Vec<_> = doc.sections[0]
+            .paragraphs
+            .iter()
+            .filter(|p| p.text == "a" || p.text == "b" || p.text == "c")
+            .collect();
+        assert_eq!(selected.len(), 3);
+        let ps_ids: Vec<u16> = selected.iter().map(|p| p.para_shape_id).collect();
+        let cs_ids: Vec<u32> = selected
+            .iter()
+            .map(|p| p.char_shapes[0].char_shape_id)
+            .collect();
+        assert!(
+            ps_ids.iter().all(|id| *id == ps_ids[0]),
+            "같은 align 이 서로 다른 para_shape_id 를 씀: {ps_ids:?}"
+        );
+        assert!(
+            cs_ids.iter().all(|id| *id == cs_ids[0]),
+            "같은 char style 이 서로 다른 char_shape_id 를 씀: {cs_ids:?}"
+        );
+    }
+
+    /// heading/table 블록에 `style` 을 주면 즉시 거부된다(paragraph 전용 필드).
+    #[test]
+    fn style_on_non_paragraph_block_is_rejected() {
+        let e = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"heading","level":1,"text":"x","style":{"bold":true}}]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("style"), "{e}");
+    }
+
     /// 개요 수준 제목이 export-structure(outline)에서 올바른 수준으로 인식된다.
     #[test]
     fn headings_round_trip_with_correct_levels() {
-        let doc = build_scaffold(&full_spec());
+        let doc = build_scaffold(&full_spec()).unwrap();
         let bytes = serialize_hwpx(&doc).unwrap();
         let reparsed = parse_hwpx(&bytes).unwrap();
         let structure = build_structure(&reparsed, StructureMode::Outline);
@@ -144,7 +257,7 @@ mod tests {
     /// 표 치수와 셀 텍스트가 그대로 복원된다.
     #[test]
     fn table_round_trips_dims_and_cell_text() {
-        let doc = build_scaffold(&full_spec());
+        let doc = build_scaffold(&full_spec()).unwrap();
         let bytes = serialize_hwpx(&doc).unwrap();
         let reparsed = parse_hwpx(&bytes).unwrap();
         let table = reparsed.sections[0]
@@ -182,7 +295,7 @@ mod tests {
     #[test]
     fn empty_spec_builds_valid_document() {
         let spec = parse_scaffold_str(r#"{"version":"1","blocks":[]}"#).unwrap();
-        let doc = build_scaffold(&spec);
+        let doc = build_scaffold(&spec).unwrap();
         assert_eq!(doc.sections.len(), 1);
         assert!(!doc.sections[0].paragraphs.is_empty());
         let bytes = serialize_hwpx(&doc).expect("빈 명세도 직렬화되어야 한다");
@@ -202,10 +315,126 @@ mod tests {
             r#"{"version":"1","blocks":[{"type":"heading","level":99,"text":"깊은 제목"}]}"#,
         )
         .unwrap();
-        let doc = build_scaffold(&spec);
+        let doc = build_scaffold(&spec).unwrap();
         let bytes = serialize_hwpx(&doc).unwrap();
         let reparsed = parse_hwpx(&bytes).unwrap();
         let structure = build_structure(&reparsed, StructureMode::Outline);
         assert_eq!(structure.roots[0].level, 7, "구조: {structure:?}");
+    }
+
+    fn table_control(doc: &crate::model::document::Document) -> crate::model::table::Table {
+        doc.sections[0]
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.controls)
+            .find_map(|c| match c {
+                Control::Table(t) => Some((**t).clone()),
+                _ => None,
+            })
+            .expect("표 컨트롤이 있어야 한다")
+    }
+
+    /// `header_rows`가 지정한 행의 셀만 `is_header=true` 로 되읽힌다.
+    #[test]
+    fn header_rows_marks_is_header_and_round_trips() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","header_rows":1,"rows":[
+                ["항목","값"],
+                ["매출","100"]
+            ]}]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).unwrap();
+        let table = table_control(&reparsed);
+        let header_cell = table
+            .cells
+            .iter()
+            .find(|c| c.row == 0 && c.col == 0)
+            .unwrap();
+        assert!(
+            header_cell.is_header,
+            "헤더 행 셀은 is_header=true 여야 한다"
+        );
+        let body_cell = table
+            .cells
+            .iter()
+            .find(|c| c.row == 1 && c.col == 0)
+            .unwrap();
+        assert!(
+            !body_cell.is_header,
+            "헤더 행이 아닌 셀은 is_header=false 여야 한다"
+        );
+    }
+
+    /// 셀 `col_span`/`row_span`이 실제 표 컨트롤의 병합으로 되읽힌다.
+    #[test]
+    fn cell_spans_merge_and_round_trip() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","rows":[
+                [{"text":"제목","col_span":2}],
+                [{"text":"좌"},{"text":"우"}]
+            ]}]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        assert!(roundtrip_ir_diff(&bytes).unwrap().is_empty());
+        let reparsed = parse_hwpx(&bytes).unwrap();
+        let table = table_control(&reparsed);
+        assert_eq!(table.row_count, 2);
+        assert_eq!(table.col_count, 2);
+        let anchor = table
+            .cells
+            .iter()
+            .find(|c| c.row == 0 && c.col == 0)
+            .unwrap();
+        assert_eq!(anchor.col_span, 2, "병합된 앵커 셀의 col_span");
+        assert_eq!(anchor.row_span, 1);
+        // 병합으로 덮인 (0,1)은 앵커로 존재하지 않는다.
+        assert!(!table.cells.iter().any(|c| c.row == 0 && c.col == 1));
+    }
+
+    /// `header_rows`가 표 행 수를 초과하면 오류로 거부된다.
+    #[test]
+    fn header_rows_exceeding_row_count_is_rejected() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","header_rows":5,"rows":[["a"]]}]}"#,
+        )
+        .unwrap();
+        let e = build_scaffold(&spec).unwrap_err();
+        assert!(
+            e.contains("header_rows(5)가 표 행 수(1)를 초과합니다"),
+            "{e}"
+        );
+    }
+
+    /// 병합 사각형이 표 경계를 벗어나면 오류로 거부된다.
+    #[test]
+    fn merge_out_of_bounds_is_rejected() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","rows":[
+                [{"text":"a","col_span":3}]
+            ]}]}"#,
+        )
+        .unwrap();
+        let e = build_scaffold(&spec).unwrap_err();
+        assert!(e.contains("표 크기"), "{e}");
+    }
+
+    /// 겹치는 두 병합 요청은 오류로 거부된다.
+    #[test]
+    fn overlapping_merges_are_rejected() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","rows":[
+                [{"text":"a","row_span":2,"col_span":2},{"text":"b"}],
+                [{"text":"c","row_span":2}, {"text":"d"}],
+                [{"text":"e"},{"text":"f"}]
+            ]}]}"#,
+        )
+        .unwrap();
+        let e = build_scaffold(&spec).unwrap_err();
+        assert!(e.contains("병합"), "{e}");
     }
 }

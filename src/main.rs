@@ -14843,7 +14843,13 @@ fn run_scaffold(args: &[String]) -> i32 {
         }
     };
 
-    let doc = rhwp::scaffold::build_scaffold(&spec);
+    let doc = match rhwp::scaffold::build_scaffold(&spec) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: scaffold 명세가 유효하지 않습니다 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    };
 
     let hwpx_bytes = match rhwp::serializer::serialize_hwpx(&doc) {
         Ok(b) => b,
