@@ -215,6 +215,15 @@ pub enum Block {
 /// 필드(오타 등)를 조용히 버리지 않고 즉시 거부해야 하는데, `#[serde(untagged)]` 는
 /// 어느 variant 도 맞지 않을 때 뭉뚱그린 오류만 내어 어떤 필드가 문제인지 알려주지
 /// 않는다.
+/// 표 셀의 세로 정렬. `"top"`/`"center"`/`"bottom"`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CellVerticalAlign {
+    Top,
+    Center,
+    Bottom,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct TableCell {
     /// 셀 텍스트.
@@ -226,6 +235,10 @@ pub struct TableCell {
     /// 셀 배경색 `"#RRGGBB"`. 헤더 행 강조나 합계 행 구분처럼, `header_rows`
     /// 만으로는 못 표현하는 임의 셀 단위 강조에 쓴다. 형식이 다르면 즉시 거부.
     pub background_color: Option<String>,
+    /// 셀 안 내용의 세로 정렬. 생략하면 문서 기본값(가운데 정렬)을 쓴다 —
+    /// 서명란처럼 셀이 넓고 내용이 아래쪽에 붙어야 하는 경우(bottom)나,
+    /// 각주형 안내문처럼 위쪽에 붙어야 하는 경우(top)에 쓴다.
+    pub vertical_align: Option<CellVerticalAlign>,
 }
 
 impl<'de> Deserialize<'de> for TableCell {
@@ -244,7 +257,7 @@ impl<'de> Deserialize<'de> for TableCell {
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(
                     f,
-                    "표 셀 문자열 또는 {{text, row_span?, col_span?, background_color?}} 객체"
+                    "표 셀 문자열 또는 {{text, row_span?, col_span?, background_color?, vertical_align?}} 객체"
                 )
             }
 
@@ -257,6 +270,7 @@ impl<'de> Deserialize<'de> for TableCell {
                     row_span: 1,
                     col_span: 1,
                     background_color: None,
+                    vertical_align: None,
                 })
             }
 
@@ -269,6 +283,7 @@ impl<'de> Deserialize<'de> for TableCell {
                     row_span: 1,
                     col_span: 1,
                     background_color: None,
+                    vertical_align: None,
                 })
             }
 
@@ -280,15 +295,17 @@ impl<'de> Deserialize<'de> for TableCell {
                 let mut row_span: Option<u16> = None;
                 let mut col_span: Option<u16> = None;
                 let mut background_color: Option<String> = None;
+                let mut vertical_align: Option<CellVerticalAlign> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "text" => text = Some(map.next_value()?),
                         "row_span" => row_span = Some(map.next_value()?),
                         "col_span" => col_span = Some(map.next_value()?),
                         "background_color" => background_color = Some(map.next_value()?),
+                        "vertical_align" => vertical_align = Some(map.next_value()?),
                         other => {
                             return Err(A::Error::custom(format!(
-                                "표 셀에 허용되지 않는 필드 '{other}' (허용: text|row_span|col_span|background_color)"
+                                "표 셀에 허용되지 않는 필드 '{other}' (허용: text|row_span|col_span|background_color|vertical_align)"
                             )))
                         }
                     }
@@ -317,6 +334,7 @@ impl<'de> Deserialize<'de> for TableCell {
                     row_span,
                     col_span,
                     background_color,
+                    vertical_align,
                 })
             }
         }

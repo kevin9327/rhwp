@@ -16,7 +16,7 @@ use crate::model::shape::{common_obj_offsets, CommonObjAttr};
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 use crate::model::Padding;
 use crate::scaffold::schema::{
-    Block, PageSize, ParagraphAlign, ParagraphStyle, ScaffoldSpec, TableCell,
+    Block, CellVerticalAlign, PageSize, ParagraphAlign, ParagraphStyle, ScaffoldSpec, TableCell,
 };
 
 // 글자 모양 ID (doc_info.char_shapes 인덱스).
@@ -542,7 +542,11 @@ fn build_table_paragraph(
             };
             let mut cell = Cell::new_empty(c, r, col_width, cell_height, border_fill_id);
             cell.padding = cell_pad;
-            cell.vertical_align = VerticalAlign::Center;
+            cell.vertical_align = match spec_cell.and_then(|tc| tc.vertical_align) {
+                Some(CellVerticalAlign::Top) => VerticalAlign::Top,
+                Some(CellVerticalAlign::Bottom) => VerticalAlign::Bottom,
+                Some(CellVerticalAlign::Center) | None => VerticalAlign::Center,
+            };
             cell.is_header = (r as usize) < header_rows;
             cell.paragraphs = vec![make_cell_para(text, col_width)];
             cell.raw_list_extra = Vec::new();
