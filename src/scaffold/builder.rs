@@ -58,7 +58,7 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
     // char_shape 축이라 서로 독립적으로 찾거나 만든다(둘 다 PS_NORMAL/CS_NORMAL
     // 을 clone하고 해당 속성만 바꿔 재사용).
     let mut align_ps_cache: Vec<(ParagraphAlign, u16)> = Vec::new();
-    let mut char_style_cs_cache: Vec<((bool, bool, bool), u32)> = Vec::new();
+    let mut char_style_cs_cache: Vec<((bool, bool, bool, bool, bool, bool), u32)> = Vec::new();
 
     // 문서 제목 — 가운데 정렬 제목 문단.
     if let Some(title) = spec
@@ -86,11 +86,18 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
                     None | Some(ParagraphAlign::Justify) => PS_NORMAL,
                     Some(a) => resolve_align_para_shape(&mut doc, &mut align_ps_cache, a),
                 };
-                let cs_id = match style {
-                    Some(s) if s.bold.is_some() || s.italic.is_some() || s.underline.is_some() => {
-                        resolve_style_char_shape(&mut doc, &mut char_style_cs_cache, *s)
-                    }
-                    _ => CS_NORMAL,
+                let affects_char_shape = style.is_some_and(|s| {
+                    s.bold.is_some()
+                        || s.italic.is_some()
+                        || s.underline.is_some()
+                        || s.strikethrough.is_some()
+                        || s.subscript.is_some()
+                        || s.superscript.is_some()
+                });
+                let cs_id = if affects_char_shape {
+                    resolve_style_char_shape(&mut doc, &mut char_style_cs_cache, (*style).unwrap())
+                } else {
+                    CS_NORMAL
                 };
                 doc.sections[0]
                     .paragraphs
@@ -142,18 +149,22 @@ fn resolve_align_para_shape(
     id
 }
 
-/// `style` 의 bold/italic/underline 이 쓸 char_shape_id 를 찾거나(캐시 적중)
-/// 새로 만든다(`CS_NORMAL` 을 clone 하고 세 속성만 바꿔 `doc.doc_info.char_shapes`
-/// 뒤에 덧붙임 — 정렬은 이 함수와 독립적으로 `resolve_align_para_shape` 가 맡는다).
+/// `style` 의 bold/italic/underline/strikethrough/subscript/superscript 가 쓸
+/// char_shape_id 를 찾거나(캐시 적중) 새로 만든다(`CS_NORMAL` 을 clone 하고
+/// 해당 속성만 바꿔 `doc.doc_info.char_shapes` 뒤에 덧붙임 — 정렬은 이 함수와
+/// 독립적으로 `resolve_align_para_shape` 가 맡는다).
 fn resolve_style_char_shape(
     doc: &mut Document,
-    cache: &mut Vec<((bool, bool, bool), u32)>,
+    cache: &mut Vec<((bool, bool, bool, bool, bool, bool), u32)>,
     style: ParagraphStyle,
 ) -> u32 {
     let key = (
         style.bold.unwrap_or(false),
         style.italic.unwrap_or(false),
         style.underline.unwrap_or(false),
+        style.strikethrough.unwrap_or(false),
+        style.subscript.unwrap_or(false),
+        style.superscript.unwrap_or(false),
     );
     if let Some((_, id)) = cache.iter().find(|(k, _)| *k == key) {
         return *id;
@@ -167,6 +178,9 @@ fn resolve_style_char_shape(
     } else {
         UnderlineType::None
     };
+    cs.strikethrough = key.3;
+    cs.subscript = key.4;
+    cs.superscript = key.5;
     let id = doc.doc_info.char_shapes.len() as u32;
     doc.doc_info.char_shapes.push(cs);
     cache.push((key, id));
