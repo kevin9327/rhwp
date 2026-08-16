@@ -120,7 +120,7 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
                     .push(make_text_para(text, ps_id, cs_id));
             }
             Block::Table { rows, header_rows } => {
-                let table_para = build_table_paragraph(rows, *header_rows, content_width)
+                let table_para = build_table_paragraph(&mut doc, rows, *header_rows, content_width)
                     .map_err(|e| format!("블록[{block_idx}](table): {e}"))?;
                 if let Some(table_para) = table_para {
                     doc.sections[0].paragraphs.push(table_para);
@@ -251,6 +251,39 @@ fn resolve_style_char_shape(
     let id = doc.doc_info.char_shapes.len() as u32;
     doc.doc_info.char_shapes.push(cs);
     cache.push((style, id));
+    id
+}
+
+/// 배경색 `hex`("#RRGGBB", 형식은 `TableCell` 파싱 시점에 이미 보장)가 쓸
+/// border_fill_id 를 찾거나(캐시 적중) 새로 만든다(`BF_SOLID`를 clone 하고
+/// `fill.solid.background_color`만 바꿔 `doc.doc_info.border_fills` 뒤에
+/// 덧붙임 — 테두리선은 그대로 물려받아 배경색만 다른 실선 표 셀이 된다).
+/// 캐시는 같은 표 안에서만 유효하다(호출자가 표 하나당 새로 만듦) — 표를
+/// 넘나드는 재사용은 이득이 적고 문서 전체를 훑는 비용이 더 크다.
+fn resolve_cell_background_border_fill(
+    doc: &mut Document,
+    cache: &mut Vec<(String, u16)>,
+    hex: &str,
+) -> u16 {
+    if let Some((_, id)) = cache.iter().find(|(h, _)| h == hex) {
+        return *id;
+    }
+    let mut bf = doc.doc_info.border_fills[(BF_SOLID - 1) as usize].clone();
+    if bf.fill.solid.is_none() {
+        bf.fill.solid = Some(crate::model::style::SolidFill {
+            background_color: 0,
+            pattern_color: 0,
+            pattern_type: 0,
+        });
+    }
+    bf.fill.fill_type = crate::model::style::FillType::Solid;
+    bf.fill.alpha = 255; // 0=완전투명/미설정 — 배경색이 실제로 보이려면 불투명이어야 함
+    if let Some(solid) = bf.fill.solid.as_mut() {
+        solid.background_color = parse_hex_color(hex);
+    }
+    let id = doc.doc_info.border_fills.len() as u16 + 1;
+    doc.doc_info.border_fills.push(bf);
+    cache.push((hex.to_string(), id));
     id
 }
 
@@ -457,6 +490,7 @@ fn make_cell_para(text: &str, col_width: u32) -> Paragraph {
 /// [`Table::merge_cells`] 로 적용한다 — 범위 초과·겹침 검증을 그 함수에 위임하고
 /// 실패는 즉시 `Err` 로 거부한다(관용 파싱 금지).
 fn build_table_paragraph(
+    doc: &mut Document,
     rows: &[Vec<TableCell>],
     header_rows: usize,
     content_width: u32,
@@ -490,6 +524,7 @@ fn build_table_paragraph(
     // 그리드가 완성된 뒤 `Table::merge_cells` 로 적용한다.
     let mut cells: Vec<Cell> = Vec::with_capacity(row_count * col_count);
     let mut merges: Vec<(u16, u16, u16, u16)> = Vec::new(); // (row, col, row_span, col_span)
+    let mut bg_border_fill_cache: Vec<(String, u16)> = Vec::new();
     for r in 0..row_count_u16 {
         for c in 0..col_count_u16 {
             let spec_cell = rows.get(r as usize).and_then(|row| row.get(c as usize));
@@ -499,7 +534,13 @@ fn build_table_paragraph(
             if row_span > 1 || col_span > 1 {
                 merges.push((r, c, row_span, col_span));
             }
-            let mut cell = Cell::new_empty(c, r, col_width, cell_height, BF_SOLID);
+            let border_fill_id = match spec_cell.and_then(|tc| tc.background_color.as_deref()) {
+                Some(hex) => {
+                    resolve_cell_background_border_fill(doc, &mut bg_border_fill_cache, hex)
+                }
+                None => BF_SOLID,
+            };
+            let mut cell = Cell::new_empty(c, r, col_width, cell_height, border_fill_id);
             cell.padding = cell_pad;
             cell.vertical_align = VerticalAlign::Center;
             cell.is_header = (r as usize) < header_rows;

@@ -223,6 +223,9 @@ pub struct TableCell {
     pub row_span: u16,
     /// 가로 병합 개수 (병합 없으면 1). 0은 허용하지 않는다.
     pub col_span: u16,
+    /// 셀 배경색 `"#RRGGBB"`. 헤더 행 강조나 합계 행 구분처럼, `header_rows`
+    /// 만으로는 못 표현하는 임의 셀 단위 강조에 쓴다. 형식이 다르면 즉시 거부.
+    pub background_color: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for TableCell {
@@ -239,7 +242,10 @@ impl<'de> Deserialize<'de> for TableCell {
             type Value = TableCell;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "표 셀 문자열 또는 {{text, row_span?, col_span?}} 객체")
+                write!(
+                    f,
+                    "표 셀 문자열 또는 {{text, row_span?, col_span?, background_color?}} 객체"
+                )
             }
 
             fn visit_str<E>(self, v: &str) -> Result<TableCell, E>
@@ -250,6 +256,7 @@ impl<'de> Deserialize<'de> for TableCell {
                     text: v.to_string(),
                     row_span: 1,
                     col_span: 1,
+                    background_color: None,
                 })
             }
 
@@ -261,6 +268,7 @@ impl<'de> Deserialize<'de> for TableCell {
                     text: v,
                     row_span: 1,
                     col_span: 1,
+                    background_color: None,
                 })
             }
 
@@ -271,15 +279,17 @@ impl<'de> Deserialize<'de> for TableCell {
                 let mut text: Option<String> = None;
                 let mut row_span: Option<u16> = None;
                 let mut col_span: Option<u16> = None;
+                let mut background_color: Option<String> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "text" => text = Some(map.next_value()?),
                         "row_span" => row_span = Some(map.next_value()?),
                         "col_span" => col_span = Some(map.next_value()?),
+                        "background_color" => background_color = Some(map.next_value()?),
                         other => {
                             return Err(A::Error::custom(format!(
-                            "표 셀에 허용되지 않는 필드 '{other}' (허용: text|row_span|col_span)"
-                        )))
+                                "표 셀에 허용되지 않는 필드 '{other}' (허용: text|row_span|col_span|background_color)"
+                            )))
                         }
                     }
                 }
@@ -292,10 +302,21 @@ impl<'de> Deserialize<'de> for TableCell {
                         "표 셀의 row_span/col_span 은 1 이상이어야 합니다",
                     ));
                 }
+                if let Some(c) = &background_color {
+                    let valid = c.len() == 7
+                        && c.starts_with('#')
+                        && c[1..].chars().all(|ch| ch.is_ascii_hexdigit());
+                    if !valid {
+                        return Err(A::Error::custom(format!(
+                            "표 셀의 background_color 는 \"#RRGGBB\" 형식이어야 합니다 (받음: {c:?})"
+                        )));
+                    }
+                }
                 Ok(TableCell {
                     text,
                     row_span,
                     col_span,
+                    background_color,
                 })
             }
         }
