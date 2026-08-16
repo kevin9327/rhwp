@@ -125,6 +125,119 @@ mod tests {
         );
     }
 
+    /// `style.align` 이 실제로 para_shape 의 alignment 로 왕복되고, 미지정 문단은
+    /// 기본(PS_NORMAL, justify)을 그대로 쓴다.
+    #[test]
+    fn paragraph_align_round_trips_to_para_shape() {
+        use crate::model::style::Alignment;
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"왼쪽","style":{"align":"left"}},
+                {"type":"paragraph","text":"가운데","style":{"align":"center"}},
+                {"type":"paragraph","text":"기본"}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let paras = &reparsed.sections[0].paragraphs;
+        let align_of = |text: &str| -> Alignment {
+            let p = paras.iter().find(|p| p.text == text).unwrap_or_else(|| {
+                panic!(
+                    "문단을 못 찾음: {text} (실제: {:?})",
+                    paras.iter().map(|p| &p.text).collect::<Vec<_>>()
+                )
+            });
+            reparsed.doc_info.para_shapes[p.para_shape_id as usize].alignment
+        };
+        assert_eq!(align_of("왼쪽"), Alignment::Left);
+        assert_eq!(align_of("가운데"), Alignment::Center);
+        assert_eq!(align_of("기본"), Alignment::Justify);
+    }
+
+    /// `style.bold`/`italic`/`underline` 이 실제로 char_shape 로 왕복된다.
+    #[test]
+    fn paragraph_char_style_round_trips_to_char_shape() {
+        use crate::model::style::UnderlineType;
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"굵게","style":{"bold":true}},
+                {"type":"paragraph","text":"기울임+밑줄","style":{"italic":true,"underline":true}},
+                {"type":"paragraph","text":"기본"}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let paras = &reparsed.sections[0].paragraphs;
+        let cs_of = |text: &str| -> crate::model::style::CharShape {
+            let p = paras.iter().find(|p| p.text == text).unwrap();
+            let cs_id = p.char_shapes[0].char_shape_id as usize;
+            reparsed.doc_info.char_shapes[cs_id].clone()
+        };
+        let bold = cs_of("굵게");
+        assert!(bold.bold);
+        assert!(!bold.italic);
+        assert_eq!(bold.underline_type, UnderlineType::None);
+
+        let styled = cs_of("기울임+밑줄");
+        assert!(!styled.bold);
+        assert!(styled.italic);
+        assert_eq!(styled.underline_type, UnderlineType::Bottom);
+
+        let normal = cs_of("기본");
+        assert!(!normal.bold);
+        assert!(!normal.italic);
+        assert_eq!(normal.underline_type, UnderlineType::None);
+    }
+
+    /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
+    /// 생성하지 않는다.
+    #[test]
+    fn repeated_style_reuses_same_shapes() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"a","style":{"align":"right","bold":true}},
+                {"type":"paragraph","text":"b","style":{"align":"right","bold":true}},
+                {"type":"paragraph","text":"c","style":{"align":"right","bold":true}}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let selected: Vec<_> = doc.sections[0]
+            .paragraphs
+            .iter()
+            .filter(|p| p.text == "a" || p.text == "b" || p.text == "c")
+            .collect();
+        assert_eq!(selected.len(), 3);
+        let ps_ids: Vec<u16> = selected.iter().map(|p| p.para_shape_id).collect();
+        let cs_ids: Vec<u32> = selected
+            .iter()
+            .map(|p| p.char_shapes[0].char_shape_id)
+            .collect();
+        assert!(
+            ps_ids.iter().all(|id| *id == ps_ids[0]),
+            "같은 align 이 서로 다른 para_shape_id 를 씀: {ps_ids:?}"
+        );
+        assert!(
+            cs_ids.iter().all(|id| *id == cs_ids[0]),
+            "같은 char style 이 서로 다른 char_shape_id 를 씀: {cs_ids:?}"
+        );
+    }
+
+    /// heading/table 블록에 `style` 을 주면 즉시 거부된다(paragraph 전용 필드).
+    #[test]
+    fn style_on_non_paragraph_block_is_rejected() {
+        let e = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"heading","level":1,"text":"x","style":{"bold":true}}]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("style"), "{e}");
+    }
+
     /// 개요 수준 제목이 export-structure(outline)에서 올바른 수준으로 인식된다.
     #[test]
     fn headings_round_trip_with_correct_levels() {

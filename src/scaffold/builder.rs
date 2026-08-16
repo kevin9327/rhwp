@@ -15,7 +15,9 @@ use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
 use crate::model::shape::{common_obj_offsets, CommonObjAttr};
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 use crate::model::Padding;
-use crate::scaffold::schema::{Block, PageSize, ScaffoldSpec, TableCell};
+use crate::scaffold::schema::{
+    Block, PageSize, ParagraphAlign, ParagraphStyle, ScaffoldSpec, TableCell,
+};
 
 // 글자 모양 ID (doc_info.char_shapes 인덱스).
 const CS_NORMAL: u32 = 0;
@@ -51,6 +53,13 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
 
     let content_width = content_width_of(&doc.sections[0].section_def.page_def);
 
+    // style 이 지정된 문단이 쓸 para_shape/char_shape 캐시 — 같은 조합이 반복돼도
+    // doc_info 에 중복 항목을 쌓지 않는다. 정렬은 para_shape, 굵게/기울임/밑줄은
+    // char_shape 축이라 서로 독립적으로 찾거나 만든다(둘 다 PS_NORMAL/CS_NORMAL
+    // 을 clone하고 해당 속성만 바꿔 재사용).
+    let mut align_ps_cache: Vec<(ParagraphAlign, u16)> = Vec::new();
+    let mut char_style_cs_cache: Vec<((bool, bool, bool), u32)> = Vec::new();
+
     // 문서 제목 — 가운데 정렬 제목 문단.
     if let Some(title) = spec
         .title
@@ -72,10 +81,20 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
                     .paragraphs
                     .push(make_text_para(text, ps_id, CS_HEADING));
             }
-            Block::Paragraph { text } => {
+            Block::Paragraph { text, style } => {
+                let ps_id = match style.and_then(|s| s.align) {
+                    None | Some(ParagraphAlign::Justify) => PS_NORMAL,
+                    Some(a) => resolve_align_para_shape(&mut doc, &mut align_ps_cache, a),
+                };
+                let cs_id = match style {
+                    Some(s) if s.bold.is_some() || s.italic.is_some() || s.underline.is_some() => {
+                        resolve_style_char_shape(&mut doc, &mut char_style_cs_cache, *s)
+                    }
+                    _ => CS_NORMAL,
+                };
                 doc.sections[0]
                     .paragraphs
-                    .push(make_text_para(text, PS_NORMAL, CS_NORMAL));
+                    .push(make_text_para(text, ps_id, cs_id));
             }
             Block::Table { rows, header_rows } => {
                 let table_para = build_table_paragraph(rows, *header_rows, content_width)
@@ -95,6 +114,63 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
     }
 
     Ok(doc)
+}
+
+/// `align` 이 지정된 문단이 쓸 para_shape_id 를 찾거나(캐시 적중) 새로 만든다
+/// (`PS_NORMAL` 을 clone 하고 alignment 만 바꿔 `doc.doc_info.para_shapes` 뒤에
+/// 덧붙임 — 고정 ID 0~8 은 이미 normal/title/heading1~7 이 쓰므로 겹치지 않는다).
+fn resolve_align_para_shape(
+    doc: &mut Document,
+    cache: &mut Vec<(ParagraphAlign, u16)>,
+    align: ParagraphAlign,
+) -> u16 {
+    if let Some((_, id)) = cache.iter().find(|(a, _)| *a == align) {
+        return *id;
+    }
+    use crate::model::style::Alignment;
+    let model_align = match align {
+        ParagraphAlign::Left => Alignment::Left,
+        ParagraphAlign::Center => Alignment::Center,
+        ParagraphAlign::Right => Alignment::Right,
+        ParagraphAlign::Justify => Alignment::Justify,
+    };
+    let mut ps = doc.doc_info.para_shapes[PS_NORMAL as usize].clone();
+    ps.alignment = model_align;
+    let id = doc.doc_info.para_shapes.len() as u16;
+    doc.doc_info.para_shapes.push(ps);
+    cache.push((align, id));
+    id
+}
+
+/// `style` 의 bold/italic/underline 이 쓸 char_shape_id 를 찾거나(캐시 적중)
+/// 새로 만든다(`CS_NORMAL` 을 clone 하고 세 속성만 바꿔 `doc.doc_info.char_shapes`
+/// 뒤에 덧붙임 — 정렬은 이 함수와 독립적으로 `resolve_align_para_shape` 가 맡는다).
+fn resolve_style_char_shape(
+    doc: &mut Document,
+    cache: &mut Vec<((bool, bool, bool), u32)>,
+    style: ParagraphStyle,
+) -> u32 {
+    let key = (
+        style.bold.unwrap_or(false),
+        style.italic.unwrap_or(false),
+        style.underline.unwrap_or(false),
+    );
+    if let Some((_, id)) = cache.iter().find(|(k, _)| *k == key) {
+        return *id;
+    }
+    use crate::model::style::UnderlineType;
+    let mut cs = doc.doc_info.char_shapes[CS_NORMAL as usize].clone();
+    cs.bold = key.0;
+    cs.italic = key.1;
+    cs.underline_type = if key.2 {
+        UnderlineType::Bottom
+    } else {
+        UnderlineType::None
+    };
+    let id = doc.doc_info.char_shapes.len() as u32;
+    doc.doc_info.char_shapes.push(cs);
+    cache.push((key, id));
+    id
 }
 
 fn init_doc_info(doc: &mut Document, font_name: &str) {

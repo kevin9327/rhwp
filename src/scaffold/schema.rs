@@ -58,6 +58,45 @@ pub struct PageSize {
     pub height_mm: f32,
 }
 
+/// 문단 정렬. 값은 소문자 문자열(`"left"`/`"center"`/`"right"`/`"justify"`)로
+/// 받는다 — 오타는 `serde` 가 알 수 없는 variant 오류로 즉시 거부한다.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ParagraphAlign {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+/// 문단의 정렬·글자 서식을 한 객체로 묶는다 — 속성 하나마다 최상위 필드를
+/// 따로 추가하지 않고, 왕복 검증을 마친 서식 축을 이 구조체 하나에 계속
+/// 얹어 나간다(스키마 문법 변경 없이 확장). 전부 선택 필드이며 생략하면
+/// 문서 기본값(양쪽맞춤·보통체)을 쓴다.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParagraphStyle {
+    #[serde(default)]
+    pub align: Option<ParagraphAlign>,
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub underline: Option<bool>,
+}
+
+impl ParagraphStyle {
+    /// 모든 필드가 `None`인가 — `Some(ParagraphStyle::default())`와 필드 생략을
+    /// 같은 취급으로 만들어, 문단 IR 생성 쪽에서 "스타일 없음" 분기를 하나로 합친다.
+    fn is_empty(&self) -> bool {
+        self.align.is_none()
+            && self.bold.is_none()
+            && self.italic.is_none()
+            && self.underline.is_none()
+    }
+}
+
 /// 본문 블록.
 ///
 /// `Deserialize` 는 수동 구현이다 — serde 의 internally-tagged enum 은
@@ -78,6 +117,9 @@ pub enum Block {
     Paragraph {
         /// 문단 텍스트.
         text: String,
+        /// 정렬·글자 서식. 생략하면 문서 기본값(양쪽맞춤·보통체).
+        #[serde(default)]
+        style: Option<ParagraphStyle>,
     },
     /// 표 (행 × 열). 각 셀은 평문 문자열(단축 표기) 또는
     /// `{"text":..,"row_span":..,"col_span":..}` 객체로 쓴다. 행마다 길이가 다르면
@@ -202,6 +244,8 @@ struct RawBlock {
     rows: Option<Vec<Vec<TableCell>>>,
     #[serde(default)]
     header_rows: Option<usize>,
+    #[serde(default)]
+    style: Option<ParagraphStyle>,
 }
 
 impl<'de> Deserialize<'de> for Block {
@@ -235,6 +279,12 @@ impl<'de> Deserialize<'de> for Block {
                     "header_rows",
                     "header_rows 는 table 블록 전용입니다",
                 )?;
+                forbid(
+                    raw.style.is_some(),
+                    "heading",
+                    "style",
+                    "style 은 paragraph 블록 전용입니다",
+                )?;
                 let text = raw
                     .text
                     .ok_or_else(|| D::Error::custom("heading 블록에 'text' 필드가 필요합니다"))?;
@@ -265,7 +315,10 @@ impl<'de> Deserialize<'de> for Block {
                 let text = raw
                     .text
                     .ok_or_else(|| D::Error::custom("paragraph 블록에 'text' 필드가 필요합니다"))?;
-                Ok(Block::Paragraph { text })
+                Ok(Block::Paragraph {
+                    text,
+                    style: raw.style.filter(|s| !s.is_empty()),
+                })
             }
             "table" => {
                 forbid(
@@ -279,6 +332,12 @@ impl<'de> Deserialize<'de> for Block {
                     "table",
                     "text",
                     "셀 내용은 'rows' 안에 넣으세요",
+                )?;
+                forbid(
+                    raw.style.is_some(),
+                    "table",
+                    "style",
+                    "style 은 paragraph 블록 전용입니다",
                 )?;
                 let rows = raw
                     .rows
