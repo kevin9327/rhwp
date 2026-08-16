@@ -15,7 +15,9 @@ use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
 use crate::model::shape::{common_obj_offsets, CommonObjAttr};
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 use crate::model::Padding;
-use crate::scaffold::schema::{Block, PageSize, ScaffoldSpec};
+use crate::scaffold::schema::{
+    Block, PageSize, ParagraphAlign, ParagraphStyle, ScaffoldSpec, TableCell,
+};
 
 // 글자 모양 ID (doc_info.char_shapes 인덱스).
 const CS_NORMAL: u32 = 0;
@@ -33,7 +35,10 @@ const BF_NONE: u16 = 1; // border_fills[0] — 무테두리 (글자/문단 참�
 const BF_SOLID: u16 = 2; // border_fills[1] — 실선 (표/셀 참조)
 
 /// [`ScaffoldSpec`] → [`Document`] IR 변환.
-pub fn build_scaffold(spec: &ScaffoldSpec) -> Document {
+///
+/// 표 블록의 `header_rows` 초과나 병합 사각형이 표 경계를 벗어나거나 다른 병합과
+/// 겹치는 경우 `Err` 로 즉시 거부한다(관용 파싱 금지 — 모듈 최상단 문서 참조).
+pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
     let mut doc = Document::default();
     init_doc_info(&mut doc, &spec.font);
 
@@ -48,6 +53,13 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Document {
 
     let content_width = content_width_of(&doc.sections[0].section_def.page_def);
 
+    // style 이 지정된 문단이 쓸 para_shape/char_shape 캐시 — 같은 조합이 반복돼도
+    // doc_info 에 중복 항목을 쌓지 않는다. 정렬은 para_shape, 굵게/기울임/밑줄은
+    // char_shape 축이라 서로 독립적으로 찾거나 만든다(둘 다 PS_NORMAL/CS_NORMAL
+    // 을 clone하고 해당 속성만 바꿔 재사용).
+    let mut align_ps_cache: Vec<(ParagraphAlign, u16)> = Vec::new();
+    let mut char_style_cs_cache: Vec<((bool, bool, bool), u32)> = Vec::new();
+
     // 문서 제목 — 가운데 정렬 제목 문단.
     if let Some(title) = spec
         .title
@@ -60,7 +72,7 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Document {
             .push(make_text_para(title, PS_TITLE, CS_TITLE));
     }
 
-    for block in &spec.blocks {
+    for (block_idx, block) in spec.blocks.iter().enumerate() {
         match block {
             Block::Heading { level, text } => {
                 let level = (*level).clamp(1, 7);
@@ -69,13 +81,25 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Document {
                     .paragraphs
                     .push(make_text_para(text, ps_id, CS_HEADING));
             }
-            Block::Paragraph { text } => {
+            Block::Paragraph { text, style } => {
+                let ps_id = match style.and_then(|s| s.align) {
+                    None | Some(ParagraphAlign::Justify) => PS_NORMAL,
+                    Some(a) => resolve_align_para_shape(&mut doc, &mut align_ps_cache, a),
+                };
+                let cs_id = match style {
+                    Some(s) if s.bold.is_some() || s.italic.is_some() || s.underline.is_some() => {
+                        resolve_style_char_shape(&mut doc, &mut char_style_cs_cache, *s)
+                    }
+                    _ => CS_NORMAL,
+                };
                 doc.sections[0]
                     .paragraphs
-                    .push(make_text_para(text, PS_NORMAL, CS_NORMAL));
+                    .push(make_text_para(text, ps_id, cs_id));
             }
-            Block::Table { rows } => {
-                if let Some(table_para) = build_table_paragraph(rows, content_width) {
+            Block::Table { rows, header_rows } => {
+                let table_para = build_table_paragraph(rows, *header_rows, content_width)
+                    .map_err(|e| format!("블록[{block_idx}](table): {e}"))?;
+                if let Some(table_para) = table_para {
                     doc.sections[0].paragraphs.push(table_para);
                     // 표 문단 뒤에는 평문 문단이 온다(한컴 표준 구조 + 다음 표와의 경계).
                     doc.sections[0].paragraphs.push(Paragraph::new_empty());
@@ -89,7 +113,64 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Document {
         doc.sections[0].paragraphs.push(Paragraph::new_empty());
     }
 
-    doc
+    Ok(doc)
+}
+
+/// `align` 이 지정된 문단이 쓸 para_shape_id 를 찾거나(캐시 적중) 새로 만든다
+/// (`PS_NORMAL` 을 clone 하고 alignment 만 바꿔 `doc.doc_info.para_shapes` 뒤에
+/// 덧붙임 — 고정 ID 0~8 은 이미 normal/title/heading1~7 이 쓰므로 겹치지 않는다).
+fn resolve_align_para_shape(
+    doc: &mut Document,
+    cache: &mut Vec<(ParagraphAlign, u16)>,
+    align: ParagraphAlign,
+) -> u16 {
+    if let Some((_, id)) = cache.iter().find(|(a, _)| *a == align) {
+        return *id;
+    }
+    use crate::model::style::Alignment;
+    let model_align = match align {
+        ParagraphAlign::Left => Alignment::Left,
+        ParagraphAlign::Center => Alignment::Center,
+        ParagraphAlign::Right => Alignment::Right,
+        ParagraphAlign::Justify => Alignment::Justify,
+    };
+    let mut ps = doc.doc_info.para_shapes[PS_NORMAL as usize].clone();
+    ps.alignment = model_align;
+    let id = doc.doc_info.para_shapes.len() as u16;
+    doc.doc_info.para_shapes.push(ps);
+    cache.push((align, id));
+    id
+}
+
+/// `style` 의 bold/italic/underline 이 쓸 char_shape_id 를 찾거나(캐시 적중)
+/// 새로 만든다(`CS_NORMAL` 을 clone 하고 세 속성만 바꿔 `doc.doc_info.char_shapes`
+/// 뒤에 덧붙임 — 정렬은 이 함수와 독립적으로 `resolve_align_para_shape` 가 맡는다).
+fn resolve_style_char_shape(
+    doc: &mut Document,
+    cache: &mut Vec<((bool, bool, bool), u32)>,
+    style: ParagraphStyle,
+) -> u32 {
+    let key = (
+        style.bold.unwrap_or(false),
+        style.italic.unwrap_or(false),
+        style.underline.unwrap_or(false),
+    );
+    if let Some((_, id)) = cache.iter().find(|(k, _)| *k == key) {
+        return *id;
+    }
+    use crate::model::style::UnderlineType;
+    let mut cs = doc.doc_info.char_shapes[CS_NORMAL as usize].clone();
+    cs.bold = key.0;
+    cs.italic = key.1;
+    cs.underline_type = if key.2 {
+        UnderlineType::Bottom
+    } else {
+        UnderlineType::None
+    };
+    let id = doc.doc_info.char_shapes.len() as u32;
+    doc.doc_info.char_shapes.push(cs);
+    cache.push((key, id));
+    id
 }
 
 fn init_doc_info(doc: &mut Document, font_name: &str) {
@@ -286,14 +367,27 @@ fn make_cell_para(text: &str, col_width: u32) -> Paragraph {
 }
 
 /// 단순 R×C 표를 담은 문단을 만든다. 행마다 열 수가 달라도 최대 열 수에 맞춰
-/// 빈 셀로 채운다(직사각 정규화). 빈 표(행 0)면 `None`.
+/// 빈 셀로 채운다(직사각 정규화). 빈 표(행 0)면 `Ok(None)`.
 ///
 /// 구조 조립은 `DocumentCore::create_table_native`
 /// (`src/document_core/commands/object_ops/table.rs`)의 균일 그리드 경로와 정합한다.
-fn build_table_paragraph(rows: &[Vec<String>], content_width: u32) -> Option<Paragraph> {
+/// `header_rows` 는 처음 N개 행의 셀에 `is_header=true` 를 표시한다(표 행 수를
+/// 초과하면 오류). 셀의 `row_span`/`col_span` > 1 은 균일 그리드를 먼저 만든 뒤
+/// [`Table::merge_cells`] 로 적용한다 — 범위 초과·겹침 검증을 그 함수에 위임하고
+/// 실패는 즉시 `Err` 로 거부한다(관용 파싱 금지).
+fn build_table_paragraph(
+    rows: &[Vec<TableCell>],
+    header_rows: usize,
+    content_width: u32,
+) -> Result<Option<Paragraph>, String> {
     let row_count = rows.len();
     if row_count == 0 {
-        return None;
+        return Ok(None);
+    }
+    if header_rows > row_count {
+        return Err(format!(
+            "header_rows({header_rows})가 표 행 수({row_count})를 초과합니다"
+        ));
     }
     let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
     let row_count_u16 = row_count.min(u16::MAX as usize) as u16;
@@ -311,18 +405,23 @@ fn build_table_paragraph(rows: &[Vec<String>], content_width: u32) -> Option<Par
     let total_width = col_width * col_count as u32;
     let total_height = rendered_row_height * row_count as u32;
 
-    // 셀 조립 (행 우선).
+    // 셀 조립 (행 우선) — 우선 병합 없는 균일 그리드로 만들고, 병합 요청은 모아뒀다가
+    // 그리드가 완성된 뒤 `Table::merge_cells` 로 적용한다.
     let mut cells: Vec<Cell> = Vec::with_capacity(row_count * col_count);
+    let mut merges: Vec<(u16, u16, u16, u16)> = Vec::new(); // (row, col, row_span, col_span)
     for r in 0..row_count_u16 {
         for c in 0..col_count_u16 {
-            let text = rows
-                .get(r as usize)
-                .and_then(|row| row.get(c as usize))
-                .map(String::as_str)
-                .unwrap_or("");
+            let spec_cell = rows.get(r as usize).and_then(|row| row.get(c as usize));
+            let text = spec_cell.map(|tc| tc.text.as_str()).unwrap_or("");
+            let row_span = spec_cell.map(|tc| tc.row_span).unwrap_or(1);
+            let col_span = spec_cell.map(|tc| tc.col_span).unwrap_or(1);
+            if row_span > 1 || col_span > 1 {
+                merges.push((r, c, row_span, col_span));
+            }
             let mut cell = Cell::new_empty(c, r, col_width, cell_height, BF_SOLID);
             cell.padding = cell_pad;
             cell.vertical_align = VerticalAlign::Center;
+            cell.is_header = (r as usize) < header_rows;
             cell.paragraphs = vec![make_cell_para(text, col_width)];
             cell.raw_list_extra = Vec::new();
             cells.push(cell);
@@ -396,11 +495,27 @@ fn build_table_paragraph(rows: &[Vec<String>], content_width: u32) -> Option<Par
     };
     table.rebuild_grid();
 
+    // 병합 적용 — 요청 순서(행 우선, 명세 등장 순)대로 적용한다. 각 병합은 범위 초과·
+    // 다른 병합과의 겹침을 `Table::merge_cells` 가 검증해 즉시 `Err` 로 거부한다.
+    for (row, col, row_span, col_span) in merges {
+        let end_row_u32 = row as u32 + row_span as u32 - 1;
+        let end_col_u32 = col as u32 + col_span as u32 - 1;
+        if end_row_u32 >= row_count_u16 as u32 || end_col_u32 >= col_count_u16 as u32 {
+            return Err(format!(
+                "표 셀(행 {row}, 열 {col})의 병합 범위(행 스팬 {row_span}×열 스팬 {col_span})가 \
+                 표 크기 {row_count_u16}×{col_count_u16}를 벗어납니다"
+            ));
+        }
+        table
+            .merge_cells(row, col, end_row_u32 as u16, end_col_u32 as u16)
+            .map_err(|e| format!("표 셀(행 {row}, 열 {col}) 병합 실패: {e}"))?;
+    }
+
     let mut table_raw_header_extra = vec![0u8; 10];
     table_raw_header_extra[0..2].copy_from_slice(&1u16.to_le_bytes());
     table_raw_header_extra[4..6].copy_from_slice(&1u16.to_le_bytes());
 
-    Some(Paragraph {
+    Ok(Some(Paragraph {
         text: String::new(),
         char_count: 9, // 확장 제어문자(8 code units) + 문단끝(1)
         control_mask: 0x0000_0800,
@@ -427,5 +542,5 @@ fn build_table_paragraph(rows: &[Vec<String>], content_width: u32) -> Option<Par
         raw_header_extra: table_raw_header_extra,
         char_count_msb: false,
         ..Default::default()
-    })
+    }))
 }

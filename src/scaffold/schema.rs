@@ -58,6 +58,45 @@ pub struct PageSize {
     pub height_mm: f32,
 }
 
+/// 문단 정렬. 값은 소문자 문자열(`"left"`/`"center"`/`"right"`/`"justify"`)로
+/// 받는다 — 오타는 `serde` 가 알 수 없는 variant 오류로 즉시 거부한다.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ParagraphAlign {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+/// 문단의 정렬·글자 서식을 한 객체로 묶는다 — 속성 하나마다 최상위 필드를
+/// 따로 추가하지 않고, 왕복 검증을 마친 서식 축을 이 구조체 하나에 계속
+/// 얹어 나간다(스키마 문법 변경 없이 확장). 전부 선택 필드이며 생략하면
+/// 문서 기본값(양쪽맞춤·보통체)을 쓴다.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParagraphStyle {
+    #[serde(default)]
+    pub align: Option<ParagraphAlign>,
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub underline: Option<bool>,
+}
+
+impl ParagraphStyle {
+    /// 모든 필드가 `None`인가 — `Some(ParagraphStyle::default())`와 필드 생략을
+    /// 같은 취급으로 만들어, 문단 IR 생성 쪽에서 "스타일 없음" 분기를 하나로 합친다.
+    fn is_empty(&self) -> bool {
+        self.align.is_none()
+            && self.bold.is_none()
+            && self.italic.is_none()
+            && self.underline.is_none()
+    }
+}
+
 /// 본문 블록.
 ///
 /// `Deserialize` 는 수동 구현이다 — serde 의 internally-tagged enum 은
@@ -78,13 +117,117 @@ pub enum Block {
     Paragraph {
         /// 문단 텍스트.
         text: String,
+        /// 정렬·글자 서식. 생략하면 문서 기본값(양쪽맞춤·보통체).
+        #[serde(default)]
+        style: Option<ParagraphStyle>,
     },
-    /// 단순 표 (행 × 열, 각 셀은 평문 텍스트).
+    /// 표 (행 × 열). 각 셀은 평문 문자열(단축 표기) 또는
+    /// `{"text":..,"row_span":..,"col_span":..}` 객체로 쓴다. 행마다 길이가 다르면
+    /// 최대 열 수에 맞춰 빈 셀(row_span=col_span=1)로 채운다(직사각 정규화).
     Table {
-        /// 행 목록. 각 행은 셀 텍스트의 목록이다. 행마다 길이가 다르면 최대 열 수에
-        /// 맞춰 빈 셀로 채운다(직사각 정규화).
-        rows: Vec<Vec<String>>,
+        /// 행 목록. 각 행은 셀의 목록이다.
+        rows: Vec<Vec<TableCell>>,
+        /// 처음 N개 행을 제목 행(`isHeader:true`)으로 표시한다. 0이면 없음.
+        /// 표 행 수를 초과하면 빌드 시 오류로 거부된다(`build_scaffold` 참조).
+        #[serde(default)]
+        header_rows: usize,
     },
+}
+
+/// 표 셀 하나. JSON 에서는 평문 문자열(단축 표기, `row_span=col_span=1` 로 취급)
+/// 또는 `{"text":..,"row_span":..,"col_span":..}` 객체로 받는다.
+///
+/// `Deserialize` 를 수동 구현하는 이유는 [`Block`] 과 같다 — 객체 형태에서 미지
+/// 필드(오타 등)를 조용히 버리지 않고 즉시 거부해야 하는데, `#[serde(untagged)]` 는
+/// 어느 variant 도 맞지 않을 때 뭉뚱그린 오류만 내어 어떤 필드가 문제인지 알려주지
+/// 않는다.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TableCell {
+    /// 셀 텍스트.
+    pub text: String,
+    /// 세로 병합 개수 (병합 없으면 1). 0은 허용하지 않는다.
+    pub row_span: u16,
+    /// 가로 병합 개수 (병합 없으면 1). 0은 허용하지 않는다.
+    pub col_span: u16,
+}
+
+impl<'de> Deserialize<'de> for TableCell {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{Error, MapAccess, Visitor};
+        use std::fmt;
+
+        struct CellVisitor;
+
+        impl<'de> Visitor<'de> for CellVisitor {
+            type Value = TableCell;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "표 셀 문자열 또는 {{text, row_span?, col_span?}} 객체")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<TableCell, E>
+            where
+                E: Error,
+            {
+                Ok(TableCell {
+                    text: v.to_string(),
+                    row_span: 1,
+                    col_span: 1,
+                })
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<TableCell, E>
+            where
+                E: Error,
+            {
+                Ok(TableCell {
+                    text: v,
+                    row_span: 1,
+                    col_span: 1,
+                })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<TableCell, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut text: Option<String> = None;
+                let mut row_span: Option<u16> = None;
+                let mut col_span: Option<u16> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "text" => text = Some(map.next_value()?),
+                        "row_span" => row_span = Some(map.next_value()?),
+                        "col_span" => col_span = Some(map.next_value()?),
+                        other => {
+                            return Err(A::Error::custom(format!(
+                            "표 셀에 허용되지 않는 필드 '{other}' (허용: text|row_span|col_span)"
+                        )))
+                        }
+                    }
+                }
+                let text =
+                    text.ok_or_else(|| A::Error::custom("표 셀 객체에 'text' 필드가 필요합니다"))?;
+                let row_span = row_span.unwrap_or(1);
+                let col_span = col_span.unwrap_or(1);
+                if row_span == 0 || col_span == 0 {
+                    return Err(A::Error::custom(
+                        "표 셀의 row_span/col_span 은 1 이상이어야 합니다",
+                    ));
+                }
+                Ok(TableCell {
+                    text,
+                    row_span,
+                    col_span,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(CellVisitor)
+    }
 }
 
 /// [`Block`] 전 변형의 필드 합집합 — 미지 필드 거부와 type 별 검증의 중간층.
@@ -98,7 +241,11 @@ struct RawBlock {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
-    rows: Option<Vec<Vec<String>>>,
+    rows: Option<Vec<Vec<TableCell>>>,
+    #[serde(default)]
+    header_rows: Option<usize>,
+    #[serde(default)]
+    style: Option<ParagraphStyle>,
 }
 
 impl<'de> Deserialize<'de> for Block {
@@ -126,6 +273,18 @@ impl<'de> Deserialize<'de> for Block {
                     "rows",
                     "표는 type:\"table\" 블록을 쓰세요",
                 )?;
+                forbid(
+                    raw.header_rows.is_some(),
+                    "heading",
+                    "header_rows",
+                    "header_rows 는 table 블록 전용입니다",
+                )?;
+                forbid(
+                    raw.style.is_some(),
+                    "heading",
+                    "style",
+                    "style 은 paragraph 블록 전용입니다",
+                )?;
                 let text = raw
                     .text
                     .ok_or_else(|| D::Error::custom("heading 블록에 'text' 필드가 필요합니다"))?;
@@ -147,10 +306,19 @@ impl<'de> Deserialize<'de> for Block {
                     "rows",
                     "표는 type:\"table\" 블록을 쓰세요",
                 )?;
+                forbid(
+                    raw.header_rows.is_some(),
+                    "paragraph",
+                    "header_rows",
+                    "header_rows 는 table 블록 전용입니다",
+                )?;
                 let text = raw
                     .text
                     .ok_or_else(|| D::Error::custom("paragraph 블록에 'text' 필드가 필요합니다"))?;
-                Ok(Block::Paragraph { text })
+                Ok(Block::Paragraph {
+                    text,
+                    style: raw.style.filter(|s| !s.is_empty()),
+                })
             }
             "table" => {
                 forbid(
@@ -165,10 +333,17 @@ impl<'de> Deserialize<'de> for Block {
                     "text",
                     "셀 내용은 'rows' 안에 넣으세요",
                 )?;
+                forbid(
+                    raw.style.is_some(),
+                    "table",
+                    "style",
+                    "style 은 paragraph 블록 전용입니다",
+                )?;
                 let rows = raw
                     .rows
                     .ok_or_else(|| D::Error::custom("table 블록에 'rows' 필드가 필요합니다"))?;
-                Ok(Block::Table { rows })
+                let header_rows = raw.header_rows.unwrap_or(0);
+                Ok(Block::Table { rows, header_rows })
             }
             other => Err(D::Error::custom(format!(
                 "알 수 없는 블록 type '{other}' (지원: heading|paragraph|table)"
@@ -255,5 +430,77 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("fnt"), "{e}");
+    }
+
+    #[test]
+    fn plain_string_cell_is_shorthand_for_span_1() {
+        let block: Block =
+            serde_json::from_str(r#"{"type":"table","rows":[["항목","값"]]}"#).unwrap();
+        let Block::Table { rows, header_rows } = block else {
+            panic!("table 이어야 합니다: {block:?}");
+        };
+        assert_eq!(header_rows, 0);
+        assert_eq!(rows[0][0].text, "항목");
+        assert_eq!(rows[0][0].row_span, 1);
+        assert_eq!(rows[0][0].col_span, 1);
+    }
+
+    #[test]
+    fn object_cell_carries_spans_and_header_rows() {
+        let block: Block = serde_json::from_str(
+            r#"{"type":"table","header_rows":1,"rows":[
+                [{"text":"제목","row_span":1,"col_span":2}],
+                [{"text":"좌"},{"text":"우"}]
+            ]}"#,
+        )
+        .unwrap();
+        let Block::Table { rows, header_rows } = block else {
+            panic!("table 이어야 합니다: {block:?}");
+        };
+        assert_eq!(header_rows, 1);
+        assert_eq!(rows[0][0].col_span, 2);
+        assert_eq!(rows[1][0].text, "좌");
+        assert_eq!(rows[1][0].row_span, 1);
+    }
+
+    #[test]
+    fn cell_object_unknown_field_is_rejected() {
+        let e = serde_json::from_str::<Block>(
+            r#"{"type":"table","rows":[[{"text":"a","bold":true}]]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("표 셀에 허용되지 않는 필드 'bold'"), "{e}");
+    }
+
+    #[test]
+    fn cell_zero_span_is_rejected() {
+        let e = serde_json::from_str::<Block>(
+            r#"{"type":"table","rows":[[{"text":"a","row_span":0}]]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("row_span/col_span 은 1 이상"), "{e}");
+    }
+
+    #[test]
+    fn cell_object_without_text_is_rejected() {
+        let e = serde_json::from_str::<Block>(r#"{"type":"table","rows":[[{"col_span":2}]]}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("'text' 필드가 필요합니다"), "{e}");
+    }
+
+    #[test]
+    fn heading_with_header_rows_is_rejected() {
+        let e = serde_json::from_str::<Block>(
+            r#"{"type":"heading","level":1,"text":"a","header_rows":1}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            e.contains("heading 블록에 허용되지 않는 필드 'header_rows'"),
+            "{e}"
+        );
     }
 }
