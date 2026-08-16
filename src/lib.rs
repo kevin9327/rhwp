@@ -25,6 +25,7 @@ pub mod pq_sign;
 pub mod provenance;
 pub mod rag;
 pub mod renderer;
+pub mod scaffold;
 pub mod schema_registry;
 pub mod security_trailer;
 pub mod serializer;
