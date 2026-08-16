@@ -269,6 +269,33 @@ mod tests {
         assert!(e.contains("color"), "{e}");
     }
 
+    /// margin_left/margin_right/indent 가 실제로 para_shape 로 왕복된다.
+    #[test]
+    fn margins_round_trip_to_para_shape() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"a","style":{"margin_left":10.0,"margin_right":5.0}},
+                {"type":"paragraph","text":"b","style":{"indent":-5.0}}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let ps_of = |text: &str| -> crate::model::style::ParaShape {
+            let p = reparsed.sections[0]
+                .paragraphs
+                .iter()
+                .find(|p| p.text == text)
+                .unwrap();
+            reparsed.doc_info.para_shapes[p.para_shape_id as usize].clone()
+        };
+        let a = ps_of("a");
+        assert_eq!(a.margin_left, 2835); // 10mm * 7200/25.4, round
+        assert_eq!(a.margin_right, 1417);
+        assert_eq!(ps_of("b").indent, -1417); // -5mm, 음수 보존(내어쓰기)
+    }
+
     /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
     /// 생성하지 않는다.
     #[test]

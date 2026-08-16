@@ -103,6 +103,17 @@ pub struct ParagraphStyle {
     /// heading 블록의 고정 크기 체계와 별개로 문단 단위 임의 크기를 준다.
     #[serde(default)]
     pub font_size: Option<f32>,
+    /// 왼쪽 여백(mm). 인용문·별첨 목록처럼 본문보다 안쪽으로 들여야 하는
+    /// 문단에 쓴다.
+    #[serde(default)]
+    pub margin_left: Option<f32>,
+    /// 오른쪽 여백(mm).
+    #[serde(default)]
+    pub margin_right: Option<f32>,
+    /// 첫 줄 들여쓰기(+, mm) 또는 내어쓰기(-, mm). 공문서의 "1. 2. 3." 항목
+    /// 번호 뒤 내어쓰기(음수)나 문단 첫 줄만 들여쓰는 관행(양수)에 쓴다.
+    #[serde(default)]
+    pub indent: Option<f32>,
 }
 
 impl ParagraphStyle {
@@ -118,6 +129,9 @@ impl ParagraphStyle {
             && self.superscript.is_none()
             && self.color.is_none()
             && self.font_size.is_none()
+            && self.margin_left.is_none()
+            && self.margin_right.is_none()
+            && self.indent.is_none()
     }
 
     /// `subscript`/`superscript` 동시 지정, `color` 형식 오류를 즉시 거부한다
