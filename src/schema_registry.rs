@@ -58,6 +58,12 @@ pub const PLAN_SCHEMA_VERSION: &str = "1.1";
 /// 봉투 계약 축으로 고정 — 해당 가드 참조).
 pub const SIGNING_SCHEMA_VERSION: &str = "1.0";
 
+/// [#gym] scaffold 축 — `rhwp scaffold` 입력 명세(`scaffold_schema_v1`)의 판.
+/// 서명 축과 같은 **입력/교환 파일 형식** 버전이라 capabilities 의
+/// schemaRegistry 축 집합(봉투 계약 축 고정)에는 싣지 않는다.
+/// 소비처는 `src/scaffold/schema.rs` 의 재수출이 유일하다.
+pub const SCAFFOLD_SCHEMA_VERSION: &str = "1";
+
 /// 릴리스 semver — Cargo.toml 의 단일 출처를 컴파일 시점에 읽는다.
 /// `rhwp::version()` 과 같은 원천이므로 두 값은 구조적으로 같다.
 pub fn crate_version() -> &'static str {
