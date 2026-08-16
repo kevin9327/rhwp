@@ -296,6 +296,34 @@ mod tests {
         assert_eq!(ps_of("b").indent, -1417); // -5mm, 음수 보존(내어쓰기)
     }
 
+    /// spacing_before/spacing_after/line_spacing_percent 가 실제로 para_shape
+    /// 로 왕복된다.
+    #[test]
+    fn spacing_round_trips_to_para_shape() {
+        let spec = parse_scaffold_str(
+            r#"{"version":"1","blocks":[
+                {"type":"paragraph","text":"a","style":{"spacing_before":10.0,"spacing_after":5.0}},
+                {"type":"paragraph","text":"b","style":{"line_spacing_percent":200}}
+            ]}"#,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let ps_of = |text: &str| -> crate::model::style::ParaShape {
+            let p = reparsed.sections[0]
+                .paragraphs
+                .iter()
+                .find(|p| p.text == text)
+                .unwrap();
+            reparsed.doc_info.para_shapes[p.para_shape_id as usize].clone()
+        };
+        let a = ps_of("a");
+        assert_eq!(a.spacing_before, 1000); // 10pt*100
+        assert_eq!(a.spacing_after, 500);
+        assert_eq!(ps_of("b").line_spacing, 200);
+    }
+
     /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
     /// 생성하지 않는다.
     #[test]
