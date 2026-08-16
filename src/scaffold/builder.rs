@@ -57,7 +57,7 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
     // doc_info 에 중복 항목을 쌓지 않는다. 정렬은 para_shape, 굵게/기울임/밑줄은
     // char_shape 축이라 서로 독립적으로 찾거나 만든다(둘 다 PS_NORMAL/CS_NORMAL
     // 을 clone하고 해당 속성만 바꿔 재사용).
-    let mut align_ps_cache: Vec<(ParagraphAlign, u16)> = Vec::new();
+    let mut para_style_cache: Vec<(ParagraphStyle, u16)> = Vec::new();
     let mut char_style_cache: Vec<(ParagraphStyle, u32)> = Vec::new();
 
     // 문서 제목 — 가운데 정렬 제목 문단.
@@ -82,9 +82,16 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
                     .push(make_text_para(text, ps_id, CS_HEADING));
             }
             Block::Paragraph { text, style } => {
-                let ps_id = match style.as_ref().and_then(|s| s.align) {
-                    None | Some(ParagraphAlign::Justify) => PS_NORMAL,
-                    Some(a) => resolve_align_para_shape(&mut doc, &mut align_ps_cache, a),
+                let affects_para_shape = style.as_ref().is_some_and(|s| {
+                    matches!(s.align, Some(a) if a != ParagraphAlign::Justify)
+                        || s.margin_left.is_some()
+                        || s.margin_right.is_some()
+                        || s.indent.is_some()
+                });
+                let ps_id = if affects_para_shape {
+                    resolve_para_style(&mut doc, &mut para_style_cache, style.clone().unwrap())
+                } else {
+                    PS_NORMAL
                 };
                 let affects_char_shape = style.as_ref().is_some_and(|s| {
                     s.bold.is_some()
@@ -129,29 +136,47 @@ pub fn build_scaffold(spec: &ScaffoldSpec) -> Result<Document, String> {
     Ok(doc)
 }
 
-/// `align` 이 지정된 문단이 쓸 para_shape_id 를 찾거나(캐시 적중) 새로 만든다
-/// (`PS_NORMAL` 을 clone 하고 alignment 만 바꿔 `doc.doc_info.para_shapes` 뒤에
-/// 덧붙임 — 고정 ID 0~8 은 이미 normal/title/heading1~7 이 쓰므로 겹치지 않는다).
-fn resolve_align_para_shape(
+/// mm(부호 있음, 내어쓰기용)를 HWPUNIT(1/7200인치)으로 변환.
+fn mm_to_hwpunit_signed(mm: f32) -> i32 {
+    ((mm as f64) * 7200.0 / 25.4).round() as i32
+}
+
+/// `style` 의 para_shape 축 필드(align/margin_left/margin_right/indent)가 쓸
+/// para_shape_id 를 찾거나(캐시 적중) 새로 만든다(`PS_NORMAL` 을 clone 하고
+/// 해당 속성만 바꿔 `doc.doc_info.para_shapes` 뒤에 덧붙임 — 고정 ID 0~8 은
+/// 이미 normal/title/heading1~7 이 쓰므로 겹치지 않는다). 캐시는 전체
+/// `ParagraphStyle`을 키로 선형 비교한다(`resolve_style_char_shape`와 같은
+/// 패턴 — 필드가 늘어도 캐시 키를 다시 넓힐 필요가 없다).
+fn resolve_para_style(
     doc: &mut Document,
-    cache: &mut Vec<(ParagraphAlign, u16)>,
-    align: ParagraphAlign,
+    cache: &mut Vec<(ParagraphStyle, u16)>,
+    style: ParagraphStyle,
 ) -> u16 {
-    if let Some((_, id)) = cache.iter().find(|(a, _)| *a == align) {
+    if let Some((_, id)) = cache.iter().find(|(s, _)| *s == style) {
         return *id;
     }
     use crate::model::style::Alignment;
-    let model_align = match align {
-        ParagraphAlign::Left => Alignment::Left,
-        ParagraphAlign::Center => Alignment::Center,
-        ParagraphAlign::Right => Alignment::Right,
-        ParagraphAlign::Justify => Alignment::Justify,
-    };
     let mut ps = doc.doc_info.para_shapes[PS_NORMAL as usize].clone();
-    ps.alignment = model_align;
+    if let Some(a) = style.align {
+        ps.alignment = match a {
+            ParagraphAlign::Left => Alignment::Left,
+            ParagraphAlign::Center => Alignment::Center,
+            ParagraphAlign::Right => Alignment::Right,
+            ParagraphAlign::Justify => Alignment::Justify,
+        };
+    }
+    if let Some(mm) = style.margin_left {
+        ps.margin_left = mm_to_hwpunit_signed(mm);
+    }
+    if let Some(mm) = style.margin_right {
+        ps.margin_right = mm_to_hwpunit_signed(mm);
+    }
+    if let Some(mm) = style.indent {
+        ps.indent = mm_to_hwpunit_signed(mm);
+    }
     let id = doc.doc_info.para_shapes.len() as u16;
     doc.doc_info.para_shapes.push(ps);
-    cache.push((align, id));
+    cache.push((style, id));
     id
 }
 
