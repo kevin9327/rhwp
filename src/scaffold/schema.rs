@@ -84,6 +84,17 @@ pub struct ParagraphStyle {
     pub italic: Option<bool>,
     #[serde(default)]
     pub underline: Option<bool>,
+    /// 취소선. 정정·무효 표시(예: "당초 계획" 위에 그어 폐기함을 나타냄)에 쓴다 —
+    /// 공문서에서 자간 조정으로 흉내 내던 것을 실제 취소선 속성으로 대체한다.
+    #[serde(default)]
+    pub strikethrough: Option<bool>,
+    /// 아래 첨자(예: 화학식 H₂O, 각주 표시). `superscript`와 동시에 `true`면 즉시
+    /// 거부(같은 텍스트가 위·아래 첨자를 동시에 가질 수 없음).
+    #[serde(default)]
+    pub subscript: Option<bool>,
+    /// 위 첨자(예: 제곱 x², 각주 번호, 서수 1st). `subscript`와 상호 배타.
+    #[serde(default)]
+    pub superscript: Option<bool>,
 }
 
 impl ParagraphStyle {
@@ -94,6 +105,20 @@ impl ParagraphStyle {
             && self.bold.is_none()
             && self.italic.is_none()
             && self.underline.is_none()
+            && self.strikethrough.is_none()
+            && self.subscript.is_none()
+            && self.superscript.is_none()
+    }
+
+    /// `subscript`와 `superscript`를 동시에 `true`로 주면 즉시 거부한다(관용
+    /// 파싱 금지 — 이 모듈의 확립된 원칙).
+    fn validate(&self) -> Result<(), String> {
+        if self.subscript == Some(true) && self.superscript == Some(true) {
+            return Err(
+                "style.subscript 와 style.superscript 를 동시에 true 로 줄 수 없습니다".to_string(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -315,6 +340,9 @@ impl<'de> Deserialize<'de> for Block {
                 let text = raw
                     .text
                     .ok_or_else(|| D::Error::custom("paragraph 블록에 'text' 필드가 필요합니다"))?;
+                if let Some(s) = &raw.style {
+                    s.validate().map_err(D::Error::custom)?;
+                }
                 Ok(Block::Paragraph {
                     text,
                     style: raw.style.filter(|s| !s.is_empty()),
