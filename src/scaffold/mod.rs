@@ -324,6 +324,61 @@ mod tests {
         assert_eq!(ps_of("b").line_spacing, 200);
     }
 
+    /// 표 셀 `background_color` 가 실제로 셀 border_fill 의 배경색으로
+    /// 왕복되고, 지정 없는 셀은 기존 무배경 실선(BF_SOLID)을 그대로 쓴다.
+    #[test]
+    fn cell_background_color_round_trips() {
+        let spec = parse_scaffold_str(
+            r##"{"version":"1","blocks":[{"type":"table","rows":[
+                [{"text":"헤더","background_color":"#FFFF00"},"평문"]
+            ]}]}"##,
+        )
+        .unwrap();
+        let doc = build_scaffold(&spec).unwrap();
+        let bytes = serialize_hwpx(&doc).unwrap();
+        let reparsed = parse_hwpx(&bytes).expect("재파싱");
+        let table = reparsed.sections[0]
+            .paragraphs
+            .iter()
+            .find_map(|p| {
+                p.controls.iter().find_map(|c| match c {
+                    Control::Table(t) => Some(t),
+                    _ => None,
+                })
+            })
+            .expect("표를 찾지 못함");
+        let yellow_cell = table
+            .cells
+            .iter()
+            .find(|c| c.col == 0 && c.row == 0)
+            .unwrap();
+        let plain_cell = table
+            .cells
+            .iter()
+            .find(|c| c.col == 1 && c.row == 0)
+            .unwrap();
+        assert_ne!(
+            yellow_cell.border_fill_id, plain_cell.border_fill_id,
+            "배경색 지정 셀과 미지정 셀이 같은 border_fill_id 를 쓰면 안 된다"
+        );
+        let bf = &reparsed.doc_info.border_fills[(yellow_cell.border_fill_id - 1) as usize];
+        assert_eq!(
+            bf.fill.solid.as_ref().map(|s| s.background_color),
+            Some(0x00FFFF00)
+        );
+    }
+
+    /// `background_color` 가 `"#RRGGBB"` 형식이 아니면 즉시 거부된다.
+    #[test]
+    fn invalid_cell_background_color_is_rejected() {
+        let e = parse_scaffold_str(
+            r#"{"version":"1","blocks":[{"type":"table","rows":[[{"text":"x","background_color":"yellow"}]]}]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("background_color"), "{e}");
+    }
+
     /// 같은 style 값을 쓰는 문단 여러 개가 para_shape/char_shape 항목을 중복
     /// 생성하지 않는다.
     #[test]
