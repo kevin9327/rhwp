@@ -6558,6 +6558,16 @@ impl TypesetEngine {
         let footnote_between_notes_margin =
             footnote_between_notes_margin_px(footnote_shape, self.dpi);
         let footnote_safety_margin = hwpunit_to_px(3000, self.dpi);
+        // [#5921] 저장 near-top 리셋의 "직전 쪽에 자리가 남았는가" 판정용 본문 높이
+        // (HU). `body_height_hu_for_variant` 는 hwp3 프로필에서만 값을 갖도록
+        // 계산되므로(그 상수들의 소비처가 hwp3 전용), 네이티브 경로용으로 따로 둔다.
+        let body_height_hu_native: i32 = page_def.height.saturating_sub(
+            page_def
+                .margin_top
+                .saturating_add(page_def.margin_bottom)
+                .saturating_add(page_def.margin_header)
+                .saturating_add(page_def.margin_footer),
+        ) as i32;
         // [Task #1007] variant cross-paragraph vpos reset THRESHOLD 계산용 body height (HU)
         let body_height_hu_for_variant: i32 = if profile.hwp3_layout() {
             page_def.height.saturating_sub(
@@ -6962,6 +6972,27 @@ impl TypesetEngine {
                     // 놓쳐 한 쪽을 과적한다. cv≈sb(±150HU) + 쪽 하단(prev_vpos_end
                     // > 60_000) + 텍스트 전용 문단으로 한정해 partial-table 잔재
                     // (#418)·표 host(#1086 주석) 케이스와 구분한다.
+                    // [#5921] 이 문단이 **직전 쪽 저장 흐름에 그대로 들어가는가**.
+                    // `prev_vpos_end > 60_000` 은 용지·여백과 무관한 절대 상수라,
+                    // 본문이 70,018HU 인 문서에서 하단으로부터 6,018HU(=80.3px)
+                    // 남은 지점도 "쪽 하단"으로 오인한다.
+                    let native_reset_fits_prev_page = body_height_hu_native > 0
+                        && para.line_segs.first().is_some_and(|seg| {
+                            prev_vpos_end
+                                .saturating_add(para_sb_hu_for_reset)
+                                .saturating_add(seg.line_height)
+                                <= body_height_hu_native
+                        });
+                    // [#5921] #2136 이 넓힌 구간 `2000 < cv <= 2500` 은 **과적**
+                    // 사례(148753276 pi46: used 942px > 본문 933.6px)로만 정당화된
+                    // 확장이다. 그 구간에서 문단이 직전 쪽에 그대로 들어가면 저장
+                    // 리셋을 쪽 경계로 승격하지 않는다 — 들어가는데 넘길 이유가 없고,
+                    // 한글도 그렇게 내지 않는다(task2136 neartop_reset_sb2500:
+                    // 잔여 80.3px ≥ 필요 63.2px 인데 쪽이 갈려 한글 2020 정본 1쪽
+                    // 대비 2쪽, render_page_samples delta=+1). 종전 구간
+                    // `cv <= 2000` 은 손대지 않는다(basic/sungeo pi63 cv=400 등
+                    // 잔여가 빠듯한 진짜 경계가 여기 있다).
+                    let native_reset_extension_misfire = cv > 2000 && native_reset_fits_prev_page;
                     let native_near_top_reset = !hwp3_origin_page_tolerance
                         && cv > 0
                         // [#2136] 상한 2000→2500: sb=5000유닛(=2500HU) 문단의 저장
@@ -6975,7 +7006,8 @@ impl TypesetEngine {
                         && !shape_only_para
                         && !has_table_control
                         && para_has_visible_text(para)
-                        && prev_vpos_end > 60_000;
+                        && prev_vpos_end > 60_000
+                        && !native_reset_extension_misfire;
                     let next_heading_after_top_content_reset =
                         paragraphs.get(para_idx + 1).is_some_and(|next_para| {
                             let next_sb_hu = styles
