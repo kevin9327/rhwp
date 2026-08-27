@@ -2729,13 +2729,14 @@ impl HeightMeasurer {
                 // (59043 쪽수 핀 5건 실측). 156739836 은 1.61% 로 발동한다.
                 let mut per_row = vec![0.0f64; row_count];
                 for cell in &table.cells {
-                    if cell.row_span == 1
-                        && (cell.row as usize) < row_count
-                        && cell.height < 0x8000_0000
-                    {
+                    if cell.row_span == 1 && cell.height < 0x8000_0000 {
+                        let r = cell.row as usize;
+                        let Ok(slot) = per_row.get_mut(r).ok_or("row OOB") else {
+                            continue;
+                        };
                         let h = hwpunit_to_px(cell.height as i32, self.dpi);
-                        if h > per_row[cell.row as usize] {
-                            per_row[cell.row as usize] = h;
+                        if h > *slot {
+                            *slot = h;
                         }
                     }
                 }
@@ -2768,13 +2769,14 @@ impl HeightMeasurer {
                 // 이라 무해 — 전역 발동 시 콘텐츠<선언 표가 광역 팽창, 163쪽 회귀).
                 let mut per_row = vec![0.0f64; row_count];
                 for cell in &table.cells {
-                    if cell.row_span == 1
-                        && (cell.row as usize) < row_count
-                        && cell.height < 0x80000000
-                    {
+                    if cell.row_span == 1 && cell.height < 0x80000000 {
+                        let r = cell.row as usize;
+                        let Ok(slot) = per_row.get_mut(r).ok_or("row OOB") else {
+                            continue;
+                        };
                         let h = hwpunit_to_px(cell.height as i32, self.dpi);
-                        if h > per_row[cell.row as usize] {
-                            per_row[cell.row as usize] = h;
+                        if h > *slot {
+                            *slot = h;
                         }
                     }
                 }
@@ -3003,11 +3005,14 @@ impl HeightMeasurer {
         // 중첩 표 셀: 실제 중첩 표 높이를 재귀 측정하여 total_content_height 보정
         for mc in &mut measured_cells {
             if mc.has_nested_table {
-                let cell = &table
+                let Ok(cell) = table
                     .cells
                     .iter()
                     .find(|c| c.row as usize == mc.row && c.col as usize == mc.col)
-                    .unwrap();
+                    .ok_or("cell lookup OOB")
+                else {
+                    continue;
+                };
                 let mc_cell_w = if cell.width < 0x80000000 {
                     hwpunit_to_px(cell.width as i32, self.dpi) * width_scale
                 } else {
