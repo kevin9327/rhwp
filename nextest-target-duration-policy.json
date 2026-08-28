@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "fallback_seconds": 1,
+  "measurement_sources": {
+    "b": {
+      "run_id": "33165509329",
+      "ref": "refs/heads/devel",
+      "sha": "b1485e0a143dc74a0ba462a1b34f8c03b0306ddd"
+    },
+    "c": {
+      "run_id": "33165509329",
+      "ref": "refs/heads/devel",
+      "sha": "b1485e0a143dc74a0ba462a1b34f8c03b0306ddd"
+    },
+    "d": {
+      "run_id": "33165509329",
+      "ref": "refs/heads/devel",
+      "sha": "b1485e0a143dc74a0ba462a1b34f8c03b0306ddd"
+    }
+  },
+  "targets": {
+    "cli_exit_codes": 1.395,
+    "issue_1144": 0.033,
+    "issue_4055_b1_chart_edit_probe": 0.439,
+    "issue_4098_legacy_chart_grid": 0.397,
+    "issue_4099_hwpx_chart_to_hwp": 0.5010000000000001,
+    "issue_4100_chart_data_edit": 5.069999999999997,
+    "issue_4969_shaping_composition_handoff": 0.032,
+    "issue_4969_shaping_emitted_run_mapping": 0.027,
+    "issue_4969_shaping_glyph_lowering": 0.072,
+    "issue_4969_shaping_page_sidecar": 0.033,
+    "issue_4969_shaping_paragraph_transaction": 0.048999999999999995,
+    "issue_4969_shaping_request_contract": 0.14700000000000002,
+    "issue_4969_shaping_shadow_context": 0.083,
+    "overflow_cell_baseline": 313.479,
+    "regression_suite_001": 6.932,
+    "regression_suite_002": 19.716,
+    "regression_suite_003": 31.542000000000016,
+    "regression_suite_004": 32.80000000000001,
+    "regression_suite_005": 11.568999999999999,
+    "regression_suite_006": 24.739000000000004,
+    "regression_suite_007": 12.847,
+    "regression_suite_008": 12.87399999999999,
+    "regression_suite_009": 667.361,
+    "regression_suite_010": 26.542999999999996,
+    "regression_suite_011": 46.243999999999986,
+    "regression_suite_012": 508.72800000000007,
+    "regression_suite_013": 18.918999999999993,
+    "regression_suite_014": 13.859999999999989,
+    "regression_suite_015": 693.4010000000001,
+    "regression_suite_016": 30.86500000000001,
+    "regression_suite_017": 18.026,
+    "regression_suite_018": 33.86,
+    "regression_suite_019": 8.389999999999999,
+    "regression_suite_020": 23.616,
+    "regression_suite_021": 40.03399999999999,
+    "regression_suite_022": 24.454999999999995,
+    "regression_suite_023": 27.478000000000012,
+    "regression_suite_024": 6.196999999999999,
+    "regression_suite_025": 331.44,
+    "regression_suite_026": 123.98599999999999,
+    "regression_suite_027": 35.278999999999996,
+    "regression_suite_028": 168.114,
+    "regression_suite_029": 9.862999999999994,
+    "regression_suite_030": 6.683999999999991,
+    "regression_suite_031": 146.039,
+    "regression_suite_032": 19.434
+  }
+}
